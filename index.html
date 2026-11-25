@@ -92,7 +92,8 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.3<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.4<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
   <!-- クエスト選択画面 -->
@@ -140,12 +141,13 @@
     </div>
 
     <button class="backlink" id="btn-to-select">← クエスト選択へもどる</button>
+    <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
 </div>
 <script>
 // === CORE START ===
-const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC","GROUP BY","JOIN","ON"]);
+const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC","GROUP BY","HAVING","JOIN","ON"]);
 const OPERATORS = new Set(["=","!=","<",">","<=",">=","LIKE"]);
 const AGG_RE = /^(COUNT|SUM|AVG|MIN|MAX)\((\*|[A-Za-z_][A-Za-z0-9_.]*)\)$/;
 
@@ -178,7 +180,7 @@ function parseQuery(tokens){
   if (next() !== "FROM") throw new Error("列のあとに FROM が必要です");
   const table = next();
   if (!table || tokenKind(table) !== "ident") throw new Error("FROM のあとにテーブル名が必要です");
-  const q = { cols: cols, table: table, join: null, where: [], groupBy: [], orderBy: null, limit: null };
+  const q = { cols: cols, table: table, join: null, where: [], whereAst: null, having: null, groupBy: [], orderBy: null, limit: null };
   if (peek() === "JOIN"){
     next();
     const t2 = next();
@@ -193,8 +195,7 @@ function parseQuery(tokens){
   }
   if (peek() === "WHERE"){
     next();
-    let joiner = null;
-    for (;;){
+    const parseCond = () => {
       const col = next();
       if (!col || tokenKind(col) !== "ident") throw new Error("WHERE の条件は「列 演算子 値」の形で並べてください");
       const op = next();
@@ -216,16 +217,47 @@ function parseQuery(tokens){
         if (!valTok || (vk !== "str" && vk !== "num")) throw new Error("条件には値が必要です");
         val = tokenValue(valTok);
       }
-      q.where.push({ col: col, op: op, val: val, join: joiner });
-      if (peek() === "AND" || peek() === "OR"){ joiner = next(); continue; }
-      break;
-    }
+      return { kind: "cond", col: col, op: op, val: val };
+    };
+    const parseFactor = () => {
+      if (peek() === "("){
+        next();
+        const e = parseOr();
+        if (next() !== ")") throw new Error("条件のカッコは ） で閉じます");
+        return e;
+      }
+      return parseCond();
+    };
+    const parseAnd = () => {
+      let l = parseFactor();
+      while (peek() === "AND"){ next(); l = { kind: "and", l: l, r: parseFactor() }; }
+      return l;
+    };
+    const parseOr = () => {
+      let l = parseAnd();
+      while (peek() === "OR"){ next(); l = { kind: "or", l: l, r: parseAnd() }; }
+      return l;
+    };
+    q.whereAst = parseOr();
+    q.where = [];
+    (function collect(n){ if (!n) return; if (n.kind === "cond") q.where.push(n); else { collect(n.l); collect(n.r); } })(q.whereAst);
   }
   if (peek() === "GROUP BY"){
     next();
     const col = next();
     if (!col || tokenKind(col) !== "ident") throw new Error("GROUP BY のあとに列が必要です");
     q.groupBy.push(col);
+  }
+  if (peek() === "HAVING"){
+    next();
+    const left = next();
+    if (!left || (tokenKind(left) !== "agg" && tokenKind(left) !== "ident")) throw new Error("HAVING の条件は「集計 演算子 値」の形で並べてください");
+    const hop = next();
+    if (!hop || tokenKind(hop) !== "op") throw new Error("HAVING の条件には演算子が必要です");
+    const hvalTok = next();
+    const hvk = hvalTok && tokenKind(hvalTok);
+    if (!hvalTok || (hvk !== "str" && hvk !== "num")) throw new Error("HAVING の条件には値が必要です");
+    q.having = { left: left, op: hop, val: tokenValue(hvalTok) };
   }
   if (peek() === "ORDER BY"){
     next();
@@ -297,6 +329,7 @@ function runQuery(quest, tokens){
   q.cols.forEach((c) => { if (c === "*") return; if (tokenKind(c) === "agg") checkAgg(c); else checkCol(c); });
   q.where.forEach((w) => checkCol(w.col));
   q.groupBy.forEach(checkCol);
+  if (q.having){ if (tokenKind(q.having.left) === "agg") checkAgg(q.having.left); else checkCol(q.having.left); }
   if (q.orderBy) checkCol(q.orderBy.col);
   if (q.join){
     if (!tables[q.join.table]) throw new Error("テーブル " + q.join.table + " はこのクエストにありません");
@@ -320,19 +353,11 @@ function runQuery(quest, tokens){
       w.val = computeAgg(sq.agg, tableObjects(tables[sq.table], sq.table));
     }
   });
-  if (q.where.length){
-    objs = objs.filter((o) => {
-      let acc = null;
-      for (const w of q.where){
-        const v = compareVals(o[w.col], w.op, w.val);
-        if (acc === null) acc = v;
-        else if (w.join === "AND") acc = acc && v;
-        else acc = acc || v;
-      }
-      return acc;
-    });
+  if (q.whereAst){
+    const evalNode = (n, o) => n.kind === "cond" ? compareVals(o[n.col], n.op, n.val) : n.kind === "and" ? (evalNode(n.l, o) && evalNode(n.r, o)) : (evalNode(n.l, o) || evalNode(n.r, o));
+    objs = objs.filter((o) => evalNode(q.whereAst, o));
   }
-  const hasAgg = q.cols.some((c) => tokenKind(c) === "agg") || q.groupBy.length > 0;
+  const hasAgg = q.cols.some((c) => tokenKind(c) === "agg") || q.groupBy.length > 0 || !!q.having;
   let outCols, out;
   if (hasAgg){
     q.cols.forEach((c) => {
@@ -353,6 +378,14 @@ function runQuery(quest, tokens){
     }
     outCols = q.cols.slice();
     out = groupList.map((g) => q.cols.map((c) => tokenKind(c) === "agg" ? computeAgg(c, g) : (g.length ? g[0][c] : null)));
+    if (q.having){
+      const hv = q.having;
+      const keep = groupList.map((g) => {
+        const lv = tokenKind(hv.left) === "agg" ? computeAgg(hv.left, g) : (g.length ? g[0][hv.left] : null);
+        return compareVals(lv, hv.op, hv.val);
+      });
+      out = out.filter((_, idx) => keep[idx]);
+    }
     if (q.orderBy){
       const ci = outCols.indexOf(q.orderBy.col);
       if (ci >= 0){
@@ -1022,6 +1055,50 @@ const QUESTS = [
     var tokens = assembly.map(function(x){ return x.text; });
     sqlEl.textContent = tokens.length ? displaySql(tokens) : "（SQLプレビュー）";
   }
+  // === 効果音（WebAudio合成、厚めの二重発振＋ローパス） ===
+  var actx = null, soundOn = true;
+  try { soundOn = localStorage.getItem("select-star-sound-v1") !== "off"; } catch (e) {}
+  function ac(){
+    if (!actx){ try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (actx && actx.state === "suspended") actx.resume();
+    return actx;
+  }
+  function tone(freq, t0, dur, type, gain, slideTo){
+    var c = ac(); if (!c) return;
+    var o = c.createOscillator(), o2 = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+    o.type = type; o2.type = type;
+    o.frequency.setValueAtTime(freq, t0); o2.frequency.setValueAtTime(freq * 1.006, t0);
+    if (slideTo){ o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur); o2.frequency.exponentialRampToValueAtTime(slideTo * 1.006, t0 + dur); }
+    f.type = "lowpass"; f.frequency.value = 2600;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(f); o2.connect(f); f.connect(g); g.connect(c.destination);
+    o.start(t0); o2.start(t0); o.stop(t0 + dur + 0.05); o2.stop(t0 + dur + 0.05);
+  }
+  function sfx(name){
+    if (!soundOn) return;
+    var c = ac(); if (!c) return;
+    var t = c.currentTime;
+    if (name === "place"){ tone(660, t, 0.09, "square", 0.15); tone(330, t, 0.10, "triangle", 0.22); }
+    else if (name === "remove"){ tone(320, t, 0.09, "square", 0.12); tone(196, t, 0.11, "triangle", 0.20); }
+    else if (name === "run"){ tone(440, t, 0.16, "sawtooth", 0.09, 880); tone(220, t, 0.16, "triangle", 0.14, 440); }
+    else if (name === "good"){ [523, 659, 784, 1047].forEach(function(fr, i){ tone(fr, t + i * 0.07, 0.24, "triangle", 0.20); tone(fr / 2, t + i * 0.07, 0.24, "sine", 0.15); }); }
+    else if (name === "bad"){ tone(160, t, 0.25, "sawtooth", 0.15); tone(110, t, 0.28, "square", 0.11); }
+  }
+  function refreshSoundBtns(){
+    document.querySelectorAll(".sndbtn").forEach(function(b){ b.textContent = soundOn ? "🔊 音：オン" : "🔇 音：オフ"; });
+  }
+  document.querySelectorAll(".sndbtn").forEach(function(b){
+    b.addEventListener("click", function(){
+      soundOn = !soundOn;
+      try { localStorage.setItem("select-star-sound-v1", soundOn ? "on" : "off"); } catch (e) {}
+      refreshSoundBtns();
+      if (soundOn) sfx("place");
+    });
+  });
+  refreshSoundBtns();
+
   function moveTile(inst, inAsm){
     if (inAsm){
       assembly = assembly.filter(function(x){ return x.uid !== inst.uid; });
@@ -1031,6 +1108,7 @@ const QUESTS = [
       assembly.push(inst);
     }
     renderTiles();
+    sfx(inAsm ? "remove" : "place");
   }
   function attachTileHandlers(el, inst, inAsm){
     var startX = 0, startY = 0, dragging = false, ghost = null;
@@ -1101,11 +1179,13 @@ const QUESTS = [
   }
 
   document.getElementById("btn-run").addEventListener("click", function(){
+    sfx("run");
     var q = QUESTS[cur];
     var tokens = assembly.map(function(x){ return x.text; });
     var res = judge(q, tokens);
     resultPanel.classList.add("show");
     if (res.ok){
+      sfx("good");
       resultPanel.classList.remove("bad"); resultPanel.classList.add("good");
       resultMsg.textContent = "クエスト達成！ 依頼どおりのデータが取れました。";
       if (res.actual) renderDataTable(resultTable, res.actual.columns, res.actual.rows);
@@ -1113,6 +1193,7 @@ const QUESTS = [
       if (cleared.indexOf(q.id) < 0){ cleared.push(q.id); saveProgress(); }
       if (cur + 1 < QUESTS.length){ btnNext.style.display = ""; } else { btnNext.style.display = "none"; }
     } else {
+      sfx("bad");
       resultPanel.classList.remove("good"); resultPanel.classList.add("bad");
       resultMsg.textContent = res.message;
       if (res.actual){ renderDataTable(resultTable, res.actual.columns, res.actual.rows); resultTable.parentElement.style.display = ""; }
@@ -1121,6 +1202,7 @@ const QUESTS = [
     }
   });
   document.getElementById("btn-clear").addEventListener("click", function(){
+    sfx("remove");
     palette = palette.concat(assembly); assembly = []; renderTiles();
   });
   btnNext.addEventListener("click", function(){ if (cur + 1 < QUESTS.length) openQuest(cur + 1); });
