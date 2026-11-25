@@ -95,7 +95,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.6<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.6.1<br>ワードタイルを並べてSQLを組み立てるパズル</p>
     <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
@@ -1196,15 +1196,9 @@ const QUESTS = [
   // クエスト選択
   var qlist = document.getElementById("qlist");
   function isUnlocked(i){ return i === 0 || cleared.indexOf(QUESTS[i - 1].id) >= 0; }
-  var expandedTheme = null;
+  var expandedTheme = "";
   function renderSelect(){
     qlist.innerHTML = "";
-    if (expandedTheme === null){
-      expandedTheme = THEMES[0].id;
-      for (var k = 0; k < QUESTS.length; k++){
-        if (cleared.indexOf(QUESTS[k].id) < 0){ expandedTheme = QUESTS[k].theme; break; }
-      }
-    }
     THEMES.forEach(function(th){
       var total = 0, done = 0;
       QUESTS.forEach(function(q){ if (q.theme === th.id){ total++; if (cleared.indexOf(q.id) >= 0) done++; } });
@@ -1217,7 +1211,7 @@ const QUESTS = [
         + (th.soon ? "" : '<span class="chev">' + (open ? "▾" : "▸") + "</span>");
       if (!th.soon){
         head.addEventListener("click", function(){
-          expandedTheme = open ? null : th.id;
+          expandedTheme = open ? "" : th.id;
           renderSelect();
         });
       }
