@@ -67,6 +67,11 @@
     font-size:14px; font-weight:700; cursor:pointer; user-select:none; -webkit-user-select:none; touch-action:none}
   .tile.kw{color:#8fc1ff}
   .tile.val{color:#ffd97a}
+  .tile.agg{color:#7ae2c3}
+  .themehead{display:flex; gap:10px; align-items:center; margin:20px 0 8px}
+  .themehead img{width:46px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line)}
+  .themehead h3{font-size:16px; text-align:left}
+  .themehead p{font-size:12px; color:var(--sub); text-align:left}
   .tile.op{color:#f2a0c0}
   .tile.inasm{border-color:var(--gold)}
   .dragghost{position:fixed; z-index:99; pointer-events:none; opacity:.92; transform:translate(-50%,-50%)}
@@ -87,7 +92,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.1<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.2<br>ワードタイルを並べてSQLを組み立てるパズル</p>
   </section>
 
   <!-- クエスト選択画面 -->
@@ -110,8 +115,7 @@
       <div class="qstage" id="g-stage"></div>
       <p class="qtitle" id="g-title"></p>
       <p class="client" id="g-client"></p>
-      <p class="secttl" id="g-tname" style="margin-top:10px"></p>
-      <div class="tblwrap"><table class="data" id="g-table"></table></div>
+      <div id="g-tables"></div>
     </div>
 
     <div class="panel">
@@ -141,13 +145,16 @@
 </div>
 <script>
 // === CORE START ===
-const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC"]);
-const OPERATORS = new Set(["=","!=","<",">","<=",">="]);
+const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC","GROUP BY","JOIN","ON"]);
+const OPERATORS = new Set(["=","!=","<",">","<=",">=","LIKE"]);
+const AGG_RE = /^(COUNT|SUM|AVG|MIN|MAX)\((\*|[A-Za-z_][A-Za-z0-9_.]*)\)$/;
 
 function tokenKind(tok){
   if (KEYWORDS.has(tok)) return "kw";
   if (OPERATORS.has(tok)) return "op";
   if (tok === "*") return "star";
+  if (tok === "(" || tok === ")") return "paren";
+  if (AGG_RE.test(tok)) return "agg";
   if (/^'.*'$/.test(tok)) return "str";
   if (/^-?\d+(\.\d+)?$/.test(tok)) return "num";
   return "ident";
@@ -166,27 +173,59 @@ function parseQuery(tokens){
   if (next() !== "SELECT") throw new Error("SELECT から始めてください");
   const cols = [];
   if (peek() === "*"){ next(); cols.push("*"); }
-  else { while (i < tokens.length && tokenKind(peek()) === "ident"){ cols.push(next()); } }
+  else { while (i < tokens.length && (tokenKind(peek()) === "ident" || tokenKind(peek()) === "agg")){ cols.push(next()); } }
   if (!cols.length) throw new Error("SELECT のあとに列を選んでください");
   if (next() !== "FROM") throw new Error("列のあとに FROM が必要です");
   const table = next();
   if (!table || tokenKind(table) !== "ident") throw new Error("FROM のあとにテーブル名が必要です");
-  const q = { cols: cols, table: table, where: [], orderBy: null, limit: null };
+  const q = { cols: cols, table: table, join: null, where: [], groupBy: [], orderBy: null, limit: null };
+  if (peek() === "JOIN"){
+    next();
+    const t2 = next();
+    if (!t2 || tokenKind(t2) !== "ident") throw new Error("JOIN のあとにテーブル名が必要です");
+    if (next() !== "ON") throw new Error("JOIN には ON が必要です");
+    const c1 = next();
+    if (!c1 || tokenKind(c1) !== "ident") throw new Error("ON の条件は「テーブル.列 = テーブル.列」の形で並べてください");
+    if (next() !== "=") throw new Error("ON の条件には = が必要です");
+    const c2 = next();
+    if (!c2 || tokenKind(c2) !== "ident") throw new Error("ON の条件は「テーブル.列 = テーブル.列」の形で並べてください");
+    q.join = { table: t2, left: c1, right: c2 };
+  }
   if (peek() === "WHERE"){
     next();
-    let join = null;
+    let joiner = null;
     for (;;){
       const col = next();
       if (!col || tokenKind(col) !== "ident") throw new Error("WHERE の条件は「列 演算子 値」の形で並べてください");
       const op = next();
-      if (!op || tokenKind(op) !== "op") throw new Error("条件には演算子（= や >= など）が必要です");
-      const valTok = next();
-      const vk = valTok && tokenKind(valTok);
-      if (!valTok || (vk !== "str" && vk !== "num")) throw new Error("条件には値が必要です");
-      q.where.push({ col: col, op: op, val: tokenValue(valTok), join: join });
-      if (peek() === "AND" || peek() === "OR"){ join = next(); continue; }
+      if (!op || tokenKind(op) !== "op") throw new Error("条件には演算子（= や >=、LIKE など）が必要です");
+      let val;
+      if (peek() === "("){
+        next();
+        if (next() !== "SELECT") throw new Error("（ のあとは SELECT から副問い合わせを書きます");
+        const aggTok = next();
+        if (!aggTok || tokenKind(aggTok) !== "agg") throw new Error("副問い合わせでは集計（AVG や MAX など）を1つ使います");
+        if (next() !== "FROM") throw new Error("副問い合わせにも FROM が必要です");
+        const st = next();
+        if (!st || tokenKind(st) !== "ident") throw new Error("副問い合わせのテーブル名が必要です");
+        if (next() !== ")") throw new Error("副問い合わせは ） で閉じます");
+        val = { subquery: { agg: aggTok, table: st } };
+      } else {
+        const valTok = next();
+        const vk = valTok && tokenKind(valTok);
+        if (!valTok || (vk !== "str" && vk !== "num")) throw new Error("条件には値が必要です");
+        val = tokenValue(valTok);
+      }
+      q.where.push({ col: col, op: op, val: val, join: joiner });
+      if (peek() === "AND" || peek() === "OR"){ joiner = next(); continue; }
       break;
     }
+  }
+  if (peek() === "GROUP BY"){
+    next();
+    const col = next();
+    if (!col || tokenKind(col) !== "ident") throw new Error("GROUP BY のあとに列が必要です");
+    q.groupBy.push(col);
   }
   if (peek() === "ORDER BY"){
     next();
@@ -214,22 +253,72 @@ function compareVals(a, op, b){
     case ">": return a > b;
     case "<=": return a <= b;
     case ">=": return a >= b;
+    case "LIKE": {
+      const pat = String(b).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".");
+      return new RegExp("^" + pat + "$").test(String(a));
+    }
   }
   return false;
 }
 
+function questTables(quest){
+  if (quest.tables) return quest.tables;
+  const t = {};
+  t[quest.table] = { columns: quest.columns, rows: quest.rows };
+  return t;
+}
+function tableObjects(tdef, tname){
+  return tdef.rows.map((r) => {
+    const o = {};
+    tdef.columns.forEach((c, idx) => { o[c] = r[idx]; o[tname + "." + c] = r[idx]; });
+    return o;
+  });
+}
+function computeAgg(aggTok, objs){
+  const m = AGG_RE.exec(aggTok);
+  const fn = m[1], arg = m[2];
+  if (fn === "COUNT") return objs.length;
+  const vals = objs.map((o) => o[arg]);
+  if (fn === "SUM") return vals.reduce((a, b) => a + b, 0);
+  if (fn === "AVG") return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  if (fn === "MIN") return vals.length ? Math.min.apply(null, vals) : null;
+  if (fn === "MAX") return vals.length ? Math.max.apply(null, vals) : null;
+  return null;
+}
+
 function runQuery(quest, tokens){
   const q = parseQuery(tokens);
-  if (q.table !== quest.table) throw new Error("テーブルは " + quest.table + " です");
-  const colSet = new Set(quest.columns);
-  const checkCol = (c) => { if (!colSet.has(c)) throw new Error("列 " + c + " はこのテーブルにありません"); };
-  q.cols.forEach((c) => { if (c !== "*") checkCol(c); });
+  const tables = questTables(quest);
+  if (!tables[q.table]) throw new Error("テーブル " + q.table + " はこのクエストにありません");
+  const allCols = new Set();
+  Object.keys(tables).forEach((tn) => { tables[tn].columns.forEach((c) => { allCols.add(c); allCols.add(tn + "." + c); }); });
+  const checkCol = (c) => { if (!allCols.has(c)) throw new Error("列 " + c + " はありません"); };
+  const checkAgg = (tok) => { const a = AGG_RE.exec(tok)[2]; if (a !== "*") checkCol(a); };
+  q.cols.forEach((c) => { if (c === "*") return; if (tokenKind(c) === "agg") checkAgg(c); else checkCol(c); });
   q.where.forEach((w) => checkCol(w.col));
+  q.groupBy.forEach(checkCol);
   if (q.orderBy) checkCol(q.orderBy.col);
-  let objs = quest.rows.map((r) => {
-    const o = {};
-    quest.columns.forEach((c, idx) => { o[c] = r[idx]; });
-    return o;
+  if (q.join){
+    if (!tables[q.join.table]) throw new Error("テーブル " + q.join.table + " はこのクエストにありません");
+    checkCol(q.join.left); checkCol(q.join.right);
+  }
+  let objs = tableObjects(tables[q.table], q.table);
+  if (q.join){
+    const right = tableObjects(tables[q.join.table], q.join.table);
+    const merged = [];
+    objs.forEach((a) => { right.forEach((b) => {
+      const o = Object.assign({}, a, b);
+      if (o[q.join.left] === o[q.join.right]) merged.push(o);
+    }); });
+    objs = merged;
+  }
+  q.where.forEach((w) => {
+    if (w.val && typeof w.val === "object" && w.val.subquery){
+      const sq = w.val.subquery;
+      if (!tables[sq.table]) throw new Error("テーブル " + sq.table + " はこのクエストにありません");
+      checkAgg(sq.agg);
+      w.val = computeAgg(sq.agg, tableObjects(tables[sq.table], sq.table));
+    }
   });
   if (q.where.length){
     objs = objs.filter((o) => {
@@ -243,12 +332,42 @@ function runQuery(quest, tokens){
       return acc;
     });
   }
-  if (q.orderBy){
-    const col = q.orderBy.col, mul = q.orderBy.dir === "DESC" ? -1 : 1;
-    objs = objs.slice().sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * mul);
+  const hasAgg = q.cols.some((c) => tokenKind(c) === "agg") || q.groupBy.length > 0;
+  let outCols, out;
+  if (hasAgg){
+    q.cols.forEach((c) => {
+      if (tokenKind(c) !== "agg" && c !== "*" && q.groupBy.indexOf(c) < 0)
+        throw new Error("集計と一緒に出せる列は GROUP BY の列だけです");
+    });
+    let groupList;
+    if (q.groupBy.length){
+      const gm = new Map();
+      objs.forEach((o) => {
+        const k = JSON.stringify(q.groupBy.map((c) => o[c]));
+        if (!gm.has(k)) gm.set(k, []);
+        gm.get(k).push(o);
+      });
+      groupList = Array.from(gm.values());
+    } else {
+      groupList = [objs];
+    }
+    outCols = q.cols.slice();
+    out = groupList.map((g) => q.cols.map((c) => tokenKind(c) === "agg" ? computeAgg(c, g) : (g.length ? g[0][c] : null)));
+    if (q.orderBy){
+      const ci = outCols.indexOf(q.orderBy.col);
+      if (ci >= 0){
+        const mul = q.orderBy.dir === "DESC" ? -1 : 1;
+        out = out.slice().sort((a, b) => (a[ci] < b[ci] ? -1 : a[ci] > b[ci] ? 1 : 0) * mul);
+      }
+    }
+  } else {
+    if (q.orderBy){
+      const col = q.orderBy.col, mul = q.orderBy.dir === "DESC" ? -1 : 1;
+      objs = objs.slice().sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * mul);
+    }
+    outCols = q.cols[0] === "*" ? tables[q.table].columns.slice() : q.cols.slice();
+    out = objs.map((o) => outCols.map((c) => o[c]));
   }
-  const outCols = q.cols[0] === "*" ? quest.columns.slice() : q.cols.slice();
-  let out = objs.map((o) => outCols.map((c) => o[c]));
   if (q.limit != null) out = out.slice(0, q.limit);
   return { columns: outCols, rows: out, ordered: !!q.orderBy };
 }
@@ -275,6 +394,15 @@ function judge(quest, playerTokens){
   return { ok: false, kind: "rows", message: "行の中身が違います。条件の値や演算子を見直してください。", expected: expected, actual: actual };
 }
 
+const THEMES = [
+  { id: "guild", name: "冒険者ギルドの受付", desc: "ギルドの名簿係として、冒険者のデータを引き出すクエスト。" },
+  { id: "cargo", name: "宇宙貨物船の積荷管理", desc: "貨物船の積荷係として、積荷と寄港地のデータを引き出すクエスト。" },
+  { id: "ecology", name: "モンスター生態調査員", soon: true },
+  { id: "scout", name: "スポーツチームのスカウト", soon: true },
+  { id: "ruins", name: "古代遺跡の記録復旧", soon: true },
+  { id: "weather", name: "気象観測所", soon: true }
+];
+
 const GUILD_COLUMNS = ["name", "job", "level", "gold"];
 const GUILD_ROWS = [
   ["アレン", "戦士", 12, 340],
@@ -288,6 +416,33 @@ const GUILD_ROWS = [
   ["レオン", "盗賊", 7, 510],
   ["ノエル", "魔法使い", 20, 890]
 ];
+
+const CARGO_COLUMNS = ["name", "category", "weight", "dest", "price"];
+const CARGO_ROWS = [
+  ["冷凍食料", "食料", 800, "ルナ港", 1200],
+  ["飲料水タンク", "食料", 950, "ルナ港", 800],
+  ["医療キット", "医療", 120, "マーズ港", 900],
+  ["手術ロボット", "医療", 640, "マーズ港", 5200],
+  ["燃料セル", "燃料", 1500, "ルナ港", 2600],
+  ["予備燃料タンク", "燃料", 1100, "タイタン港", 2400],
+  ["工作機械", "機械", 2000, "マーズ港", 7800],
+  ["センサー部品", "機械", 80, "タイタン港", 1500],
+  ["観測ドローン", "機械", 240, "ルナ港", 3100],
+  ["種子バンク", "食料", 60, "タイタン港", 2000],
+  ["抗生物質", "医療", 45, "ルナ港", 700],
+  ["冷却材", "燃料", 720, "マーズ港", 1300]
+];
+const PORTS_COLUMNS = ["name", "sector"];
+const PORTS_ROWS = [
+  ["ルナ港", "月軌道"],
+  ["マーズ港", "火星軌道"],
+  ["タイタン港", "外惑星軌道"]
+];
+function cargoTables(withPorts){
+  const t = { cargo: { columns: CARGO_COLUMNS, rows: CARGO_ROWS } };
+  if (withPorts) t.ports = { columns: PORTS_COLUMNS, rows: PORTS_ROWS };
+  return t;
+}
 
 const QUESTS = [
   { id: "guild-01", theme: "guild", stage: 1, stageName: "階段1：SELECT＋FROM",
@@ -349,9 +504,71 @@ const QUESTS = [
     client: "ギルドマスター「所持金400以上の人の名前と所持金を、所持金の少ない順に並べてくれ」",
     table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
     tiles: ["SELECT", "name", "gold", "gold", "gold", "FROM", "adventurers", "WHERE", ">=", "400", "ORDER BY", "ASC", "DESC", "100", "level"],
-    solution: ["SELECT", "name", "gold", "FROM", "adventurers", "WHERE", "gold", ">=", "400", "ORDER BY", "gold", "ASC"] }
+    solution: ["SELECT", "name", "gold", "FROM", "adventurers", "WHERE", "gold", ">=", "400", "ORDER BY", "gold", "ASC"] },
+
+  { id: "cargo-01", theme: "cargo", stage: 5, stageName: "階段5：LIKE",
+    title: "燃料の積荷を探して",
+    client: "積荷係の先輩「『燃料』って名前の入った積荷を探してくれ。品名だけでいい」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "name", "name", "FROM", "cargo", "WHERE", "LIKE", "'%燃料%'", "=", "'%医療%'", "category"],
+    solution: ["SELECT", "name", "FROM", "cargo", "WHERE", "name", "LIKE", "'%燃料%'"] },
+  { id: "cargo-02", theme: "cargo", stage: 5, stageName: "階段5：LIKE",
+    title: "タで始まる届け先",
+    client: "船長「届け先が『タ』で始まる積荷を確認したい。品名と届け先を見せてくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "name", "dest", "dest", "FROM", "cargo", "WHERE", "LIKE", "'タ%'", "'%港'", "=", "category"],
+    solution: ["SELECT", "name", "dest", "FROM", "cargo", "WHERE", "dest", "LIKE", "'タ%'"] },
+  { id: "cargo-03", theme: "cargo", stage: 6, stageName: "階段6：集計 COUNT",
+    title: "積荷は何件？",
+    client: "積荷係の先輩「積荷は全部で何件ある？ 件数だけ教えてくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "COUNT(*)", "FROM", "cargo", "name", "SUM(weight)"],
+    solution: ["SELECT", "COUNT(*)", "FROM", "cargo"] },
+  { id: "cargo-04", theme: "cargo", stage: 6, stageName: "階段6：集計 SUM",
+    title: "総重量を出して",
+    client: "船長「船のバランスを見る。積荷全体の重量の合計を出してくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "SUM(weight)", "FROM", "cargo", "COUNT(*)", "AVG(weight)", "price"],
+    solution: ["SELECT", "SUM(weight)", "FROM", "cargo"] },
+  { id: "cargo-05", theme: "cargo", stage: 6, stageName: "階段6：GROUP BY",
+    title: "分類ごとの件数",
+    client: "積荷係の先輩「分類ごとに何件あるか数えてくれ。分類と件数の一覧で頼む」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "category", "COUNT(*)", "FROM", "cargo", "GROUP BY", "category", "dest", "SUM(weight)"],
+    solution: ["SELECT", "category", "COUNT(*)", "FROM", "cargo", "GROUP BY", "category"] },
+  { id: "cargo-06", theme: "cargo", stage: 6, stageName: "階段6：GROUP BY",
+    title: "届け先ごとの重量",
+    client: "船長「届け先ごとに、重量の合計を出してくれ。届け先と合計重量の一覧で頼む」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest", "category", "COUNT(*)"],
+    solution: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest"] },
+  { id: "cargo-07", theme: "cargo", stage: 7, stageName: "階段7：JOIN",
+    title: "どの宙域へ行く？",
+    client: "航海士「各積荷がどの宙域へ行くのか知りたい。寄港地の表とつないで、品名と宙域の一覧を頼む」",
+    tables: cargoTables(true),
+    tiles: ["SELECT", "cargo.name", "ports.sector", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name", "cargo.weight", "dest"],
+    solution: ["SELECT", "cargo.name", "ports.sector", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name"] },
+  { id: "cargo-08", theme: "cargo", stage: 7, stageName: "階段7：JOIN＋WHERE",
+    title: "月軌道あての積荷",
+    client: "船長「月軌道あての積荷を確認したい。品名と届け先を見せてくれ」",
+    tables: cargoTables(true),
+    tiles: ["SELECT", "cargo.name", "cargo.dest", "cargo.dest", "FROM", "cargo", "JOIN", "ports", "ON", "=", "=", "ports.name", "WHERE", "ports.sector", "'月軌道'", "'火星軌道'", "sector"],
+    solution: ["SELECT", "cargo.name", "cargo.dest", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name", "WHERE", "ports.sector", "=", "'月軌道'"] },
+  { id: "cargo-09", theme: "cargo", stage: 8, stageName: "階段8：副問い合わせ",
+    title: "平均より重い積荷",
+    client: "船長「平均より重い積荷を教えてくれ。品名と重量で頼む」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "SELECT", "name", "weight", "weight", "FROM", "FROM", "cargo", "cargo", "WHERE", ">", "(", "AVG(weight)", ")", "MAX(weight)", "800"],
+    solution: ["SELECT", "name", "weight", "FROM", "cargo", "WHERE", "weight", ">", "(", "SELECT", "AVG(weight)", "FROM", "cargo", ")"] },
+  { id: "cargo-10", theme: "cargo", stage: 8, stageName: "階段8：副問い合わせ",
+    title: "一番運賃の高い積荷",
+    client: "経理担当「一番運賃の高い積荷はどれだ？ 品名と運賃を見せてくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "SELECT", "name", "price", "price", "FROM", "FROM", "cargo", "cargo", "WHERE", "=", "(", "MAX(price)", ")", "AVG(price)", "5000"],
+    solution: ["SELECT", "name", "price", "FROM", "cargo", "WHERE", "price", "=", "(", "SELECT", "MAX(price)", "FROM", "cargo", ")"] }
 ];
 // === CORE END ===
+
 </script>
 <script>
 (function(){
@@ -372,16 +589,25 @@ const QUESTS = [
   function isUnlocked(i){ return i === 0 || cleared.indexOf(QUESTS[i - 1].id) >= 0; }
   function renderSelect(){
     qlist.innerHTML = "";
-    QUESTS.forEach(function(q, i){
-      var b = document.createElement("button");
-      b.className = "bigbtn qbtn";
-      var st = "";
-      if (cleared.indexOf(q.id) >= 0) st = '<span class="st clear">✓ クリア</span>';
-      else if (!isUnlocked(i)) st = '<span class="st lock">未解放</span>';
-      b.innerHTML = "Q" + (i + 1) + "　" + q.title + st;
-      b.disabled = !isUnlocked(i);
-      b.addEventListener("click", function(){ openQuest(i); });
-      qlist.appendChild(b);
+    THEMES.forEach(function(th){
+      var head = document.createElement("div");
+      head.className = "themehead";
+      head.innerHTML = '<img src="assets/bg-' + th.id + '.jpg" alt="">'
+        + "<div><h3>" + th.name + "</h3><p>" + (th.soon ? "準備中" : th.desc) + "</p></div>";
+      qlist.appendChild(head);
+      if (th.soon) return;
+      QUESTS.forEach(function(q, i){
+        if (q.theme !== th.id) return;
+        var b = document.createElement("button");
+        b.className = "bigbtn qbtn";
+        var st = "";
+        if (cleared.indexOf(q.id) >= 0) st = '<span class="st clear">✓ クリア</span>';
+        else if (!isUnlocked(i)) st = '<span class="st lock">未解放</span>';
+        b.innerHTML = "Q" + (i + 1) + "　" + q.title + st;
+        b.disabled = !isUnlocked(i);
+        b.addEventListener("click", function(){ openQuest(i); });
+        qlist.appendChild(b);
+      });
     });
   }
 
@@ -399,16 +625,18 @@ const QUESTS = [
   }
   function tileClass(text){
     var k = tokenKind(text);
-    if (k === "kw") return "tile kw";
+    if (k === "kw" || k === "paren") return "tile kw";
     if (k === "op") return "tile op";
+    if (k === "agg") return "tile agg";
     if (k === "str" || k === "num") return "tile val";
     return "tile";
   }
   function displaySql(tokens){
     var parts = [], inSel = true;
+    var isCol = function(t){ var k = tokenKind(t); return k === "ident" || k === "agg"; };
     tokens.forEach(function(t, idx){
       if (t === "FROM") inSel = false;
-      if (inSel && idx > 1 && tokenKind(t) === "ident" && (tokenKind(tokens[idx - 1]) === "ident" || tokens[idx - 1] === "*")) parts.push(",");
+      if (inSel && idx > 1 && isCol(t) && (isCol(tokens[idx - 1]) || tokens[idx - 1] === "*")) parts.push(",");
       parts.push(t);
     });
     return parts.join(" ").replace(/ ,/g, ",");
@@ -484,12 +712,25 @@ const QUESTS = [
     document.getElementById("g-stage").textContent = q.stageName;
     document.getElementById("g-title").textContent = "Q" + (i + 1) + "　" + q.title;
     document.getElementById("g-client").textContent = q.client;
-    document.getElementById("g-tname").textContent = "テーブル： " + q.table;
-    // テーブル表示：列名ヘッダ＋全行
-    var tbl = document.getElementById("g-table");
-    var html = "<tr>" + q.columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
-    q.rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
-    tbl.innerHTML = html;
+    // テーブル表示：クエストの全テーブル（列名ヘッダ＋全行）
+    var tables = questTables(q);
+    var wrap = document.getElementById("g-tables");
+    wrap.innerHTML = "";
+    Object.keys(tables).forEach(function(tn){
+      var td = tables[tn];
+      var p = document.createElement("p");
+      p.className = "secttl"; p.style.marginTop = "10px";
+      p.textContent = "テーブル： " + tn;
+      var w = document.createElement("div");
+      w.className = "tblwrap";
+      var t = document.createElement("table");
+      t.className = "data";
+      var html = "<tr>" + td.columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
+      td.rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
+      t.innerHTML = html;
+      w.appendChild(t);
+      wrap.appendChild(p); wrap.appendChild(w);
+    });
     screens.game.style.backgroundImage = "url(assets/bg-" + q.theme + ".jpg)";
     palette = q.tiles.map(function(t){ return { uid: ++uidSeq, text: t }; });
     assembly = [];
