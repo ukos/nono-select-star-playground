@@ -72,6 +72,9 @@
   .themehead img{width:46px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line)}
   .themehead h3{font-size:16px; text-align:left}
   .themehead p{font-size:12px; color:var(--sub); text-align:left}
+  .themehead.tap{cursor:pointer}
+  .themehead .chev{margin-left:auto; font-size:18px; color:var(--sub); padding:0 6px}
+  .themehead .prog{color:var(--accent, #ffd34d); font-weight:700}
   .tile.op{color:#f2a0c0}
   .tile.inasm{border-color:var(--gold)}
   .dragghost{position:fixed; z-index:99; pointer-events:none; opacity:.92; transform:translate(-50%,-50%)}
@@ -92,7 +95,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.5.1<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.6<br>ワードタイルを並べてSQLを組み立てるパズル</p>
     <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
@@ -1193,15 +1196,33 @@ const QUESTS = [
   // クエスト選択
   var qlist = document.getElementById("qlist");
   function isUnlocked(i){ return i === 0 || cleared.indexOf(QUESTS[i - 1].id) >= 0; }
+  var expandedTheme = null;
   function renderSelect(){
     qlist.innerHTML = "";
+    if (expandedTheme === null){
+      expandedTheme = THEMES[0].id;
+      for (var k = 0; k < QUESTS.length; k++){
+        if (cleared.indexOf(QUESTS[k].id) < 0){ expandedTheme = QUESTS[k].theme; break; }
+      }
+    }
     THEMES.forEach(function(th){
+      var total = 0, done = 0;
+      QUESTS.forEach(function(q){ if (q.theme === th.id){ total++; if (cleared.indexOf(q.id) >= 0) done++; } });
+      var open = expandedTheme === th.id;
       var head = document.createElement("div");
-      head.className = "themehead";
+      head.className = "themehead" + (th.soon ? "" : " tap");
       head.innerHTML = '<img src="assets/bg-' + th.id + '.jpg" alt="">'
-        + "<div><h3>" + th.name + "</h3><p>" + (th.soon ? "準備中" : th.desc) + "</p></div>";
+        + "<div><h3>" + th.name + "</h3><p>" + (th.soon ? "準備中" : th.desc) + "</p>"
+        + (th.soon ? "" : '<p class="prog">クリア ' + done + "／" + total + "</p>") + "</div>"
+        + (th.soon ? "" : '<span class="chev">' + (open ? "▾" : "▸") + "</span>");
+      if (!th.soon){
+        head.addEventListener("click", function(){
+          expandedTheme = open ? null : th.id;
+          renderSelect();
+        });
+      }
       qlist.appendChild(head);
-      if (th.soon) return;
+      if (th.soon || !open) return;
       QUESTS.forEach(function(q, i){
         if (q.theme !== th.id) return;
         var b = document.createElement("button");
@@ -1360,6 +1381,7 @@ const QUESTS = [
   function openQuest(i){
     cur = i;
     var q = QUESTS[i];
+    expandedTheme = q.theme;
     document.getElementById("g-stage").textContent = q.stageName;
     document.getElementById("g-title").textContent = "Q" + (i + 1) + "　" + q.title;
     document.getElementById("g-client").textContent = q.client;
