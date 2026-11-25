@@ -92,7 +92,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.4<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.5<br>ワードタイルを並べてSQLを組み立てるパズル</p>
     <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
@@ -103,7 +103,7 @@
       <img src="assets/bg-guild.jpg" alt="冒険者ギルドの受付">
       <div>
         <div class="tn">冒険者ギルドの受付</div>
-        <div class="ts">ギルドの名簿係として、冒険者のデータを引き出すクエスト。全10問（パイロット）。</div>
+        <div class="ts">ギルドの名簿係として、冒険者のデータを引き出すクエスト。</div>
       </div>
     </div>
     <div id="qlist"></div>
@@ -147,7 +147,7 @@
 </div>
 <script>
 // === CORE START ===
-const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC","GROUP BY","HAVING","JOIN","ON"]);
+const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC","GROUP BY","HAVING","JOIN","ON","PIVOT","FOR"]);
 const OPERATORS = new Set(["=","!=","<",">","<=",">=","LIKE"]);
 const AGG_RE = /^(COUNT|SUM|AVG|MIN|MAX)\((\*|[A-Za-z_][A-Za-z0-9_.]*)\)$/;
 
@@ -174,13 +174,30 @@ function parseQuery(tokens){
   const next = () => tokens[i++];
   if (next() !== "SELECT") throw new Error("SELECT から始めてください");
   const cols = [];
+  let pivotSpec = null;
   if (peek() === "*"){ next(); cols.push("*"); }
-  else { while (i < tokens.length && (tokenKind(peek()) === "ident" || tokenKind(peek()) === "agg")){ cols.push(next()); } }
-  if (!cols.length) throw new Error("SELECT のあとに列を選んでください");
+  else {
+    while (i < tokens.length){
+      if (peek() === "PIVOT"){
+        next();
+        const aggTok = next();
+        if (!aggTok || tokenKind(aggTok) !== "agg") throw new Error("PIVOT のあとに集計（SUM や COUNT(*) など）を1つ置きます");
+        if (next() !== "FOR") throw new Error("PIVOT の集計のあとに FOR が必要です");
+        const forCol = next();
+        if (!forCol || tokenKind(forCol) !== "ident") throw new Error("FOR のあとに、列にしたい列名が必要です");
+        if (cols.length > 1 || (cols.length === 1 && tokenKind(cols[0]) !== "ident")) throw new Error("PIVOT の前に置けるのは、行の列1つまでです");
+        pivotSpec = { agg: aggTok, forCol: forCol, rowKey: cols.length ? cols[0] : null };
+        break;
+      }
+      if (tokenKind(peek()) === "ident" || tokenKind(peek()) === "agg"){ cols.push(next()); continue; }
+      break;
+    }
+  }
+  if (!cols.length && !pivotSpec) throw new Error("SELECT のあとに列を選んでください");
   if (next() !== "FROM") throw new Error("列のあとに FROM が必要です");
   const table = next();
   if (!table || tokenKind(table) !== "ident") throw new Error("FROM のあとにテーブル名が必要です");
-  const q = { cols: cols, table: table, join: null, where: [], whereAst: null, having: null, groupBy: [], orderBy: null, limit: null };
+  const q = { cols: cols, table: table, join: null, where: [], whereAst: null, having: null, pivot: pivotSpec, groupBy: [], orderBy: null, limit: null };
   if (peek() === "JOIN"){
     next();
     const t2 = next();
@@ -330,6 +347,7 @@ function runQuery(quest, tokens){
   q.where.forEach((w) => checkCol(w.col));
   q.groupBy.forEach(checkCol);
   if (q.having){ if (tokenKind(q.having.left) === "agg") checkAgg(q.having.left); else checkCol(q.having.left); }
+  if (q.pivot){ checkAgg(q.pivot.agg); checkCol(q.pivot.forCol); if (q.pivot.rowKey) checkCol(q.pivot.rowKey); }
   if (q.orderBy) checkCol(q.orderBy.col);
   if (q.join){
     if (!tables[q.join.table]) throw new Error("テーブル " + q.join.table + " はこのクエストにありません");
@@ -356,6 +374,29 @@ function runQuery(quest, tokens){
   if (q.whereAst){
     const evalNode = (n, o) => n.kind === "cond" ? compareVals(o[n.col], n.op, n.val) : n.kind === "and" ? (evalNode(n.l, o) && evalNode(n.r, o)) : (evalNode(n.l, o) || evalNode(n.r, o));
     objs = objs.filter((o) => evalNode(q.whereAst, o));
+  }
+  if (q.pivot){
+    const pv = q.pivot;
+    const colVals = [];
+    objs.forEach((o) => { if (colVals.indexOf(o[pv.forCol]) < 0) colVals.push(o[pv.forCol]); });
+    const rowVals = [];
+    if (pv.rowKey) objs.forEach((o) => { if (rowVals.indexOf(o[pv.rowKey]) < 0) rowVals.push(o[pv.rowKey]); });
+    const pvFn = AGG_RE.exec(pv.agg)[1];
+    const outColsP = (pv.rowKey ? [pv.rowKey] : []).concat(colVals.map((v) => String(v)));
+    let outP = (pv.rowKey ? rowVals : [null]).map((rv) => {
+      const head = pv.rowKey ? [rv] : [];
+      return head.concat(colVals.map((cv) => {
+        const sub = objs.filter((o) => (pv.rowKey ? o[pv.rowKey] === rv : true) && o[pv.forCol] === cv);
+        if (!sub.length) return (pvFn === "COUNT" || pvFn === "SUM") ? 0 : null;
+        return computeAgg(pv.agg, sub);
+      }));
+    });
+    if (q.orderBy){
+      const ci = outColsP.indexOf(q.orderBy.col);
+      if (ci >= 0){ const mul = q.orderBy.dir === "DESC" ? -1 : 1; outP = outP.slice().sort((a, b) => (a[ci] < b[ci] ? -1 : a[ci] > b[ci] ? 1 : 0) * mul); }
+    }
+    if (q.limit != null) outP = outP.slice(0, q.limit);
+    return { columns: outColsP, rows: outP, ordered: !!q.orderBy };
   }
   const hasAgg = q.cols.some((c) => tokenKind(c) === "agg") || q.groupBy.length > 0 || !!q.having;
   let outCols, out;
@@ -957,8 +998,187 @@ const QUESTS = [
     client: "所長「一番風速が大きかった日はどれだ？ 日付と風速を見せてくれ」",
     tables: weatherTables(false),
     tiles: ["SELECT", "SELECT", "day", "wind", "wind", "FROM", "FROM", "weather", "weather", "WHERE", "=", "(", "MAX(wind)", ")", "AVG(wind)", "8"],
-    solution: ["SELECT", "day", "wind", "FROM", "weather", "WHERE", "wind", "=", "(", "SELECT", "MAX(wind)", "FROM", "weather", ")"] }
-
+    solution: ["SELECT", "day", "wind", "FROM", "weather", "WHERE", "wind", "=", "(", "SELECT", "MAX(wind)", "FROM", "weather", ")"] },
+  { id: "guild-11", theme: "guild", stage: 9, stageName: "上級1：複合条件（カッコ）",
+    title: "前衛と盗賊の精鋭",
+    client: "受付の先輩「戦士か盗賊で、レベル10以上の人を呼んでくれ。名前の一覧で頼む」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "FROM", "adventurers", "WHERE", "(", "job", "=", "'戦士'", "OR", "job", "=", "'盗賊'", ")", "AND", "level", ">=", "10", "'魔法使い'", "<=", "gold", "5"],
+    solution: ["SELECT", "name", "FROM", "adventurers", "WHERE", "(", "job", "=", "'戦士'", "OR", "job", "=", "'盗賊'", ")", "AND", "level", ">=", "10"] },
+  { id: "guild-12", theme: "guild", stage: 9, stageName: "上級2：複合条件（優先順位）",
+    title: "戦士全員とベテラン盗賊",
+    client: "依頼人「戦士は全員、それとレベル10以上の盗賊を呼んでくれ。カッコなしで、ANDとORの優先順位を使って表現できるはずだ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "FROM", "adventurers", "WHERE", "job", "=", "'戦士'", "OR", "job", "=", "'盗賊'", "AND", "level", ">=", "10", "(", ")", "'僧侶'", "<="],
+    solution: ["SELECT", "name", "FROM", "adventurers", "WHERE", "job", "=", "'戦士'", "OR", "job", "=", "'盗賊'", "AND", "level", ">=", "10"] },
+  { id: "guild-13", theme: "guild", stage: 9, stageName: "上級3：HAVING",
+    title: "所持金の多い職業",
+    client: "経理担当「職業ごとに所持金の合計を出して、合計が1400以上の職業だけ見せてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "job", "SUM(gold)", "FROM", "adventurers", "GROUP BY", "job", "HAVING", "SUM(gold)", ">=", "1400", "COUNT(*)", "1000", "WHERE", "AVG(gold)"],
+    solution: ["SELECT", "job", "SUM(gold)", "FROM", "adventurers", "GROUP BY", "job", "HAVING", "SUM(gold)", ">=", "1400"] },
+  { id: "guild-14", theme: "guild", stage: 9, stageName: "上級4：HAVING応用",
+    title: "人数の多い職業（レベル5以上）",
+    client: "受付の先輩「レベル5以上に限って職業ごとの人数を数え、3人以上いる職業だけ見せてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "job", "COUNT(*)", "FROM", "adventurers", "WHERE", "level", ">=", "5", "GROUP BY", "job", "HAVING", "COUNT(*)", ">=", "3", "SUM(gold)", "2", "ORDER BY", "DESC"],
+    solution: ["SELECT", "job", "COUNT(*)", "FROM", "adventurers", "WHERE", "level", ">=", "5", "GROUP BY", "job", "HAVING", "COUNT(*)", ">=", "3"] },
+  { id: "guild-15", theme: "guild", stage: 9, stageName: "上級5：ピボット変換",
+    title: "職業別の人数を横に",
+    client: "受付の先輩「職業ごとの人数を、職業を列にして横に並べた表で見せてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "PIVOT", "COUNT(*)", "FOR", "job", "FROM", "adventurers", "SUM(gold)", "GROUP BY", "level"],
+    solution: ["SELECT", "PIVOT", "COUNT(*)", "FOR", "job", "FROM", "adventurers"] },
+  { id: "cargo-11", theme: "cargo", stage: 9, stageName: "上級1：複合条件（カッコ）",
+    title: "食料と医療の高額便",
+    client: "船長「食料か医療の積荷で、運賃1000以上の品名を出してくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "name", "FROM", "cargo", "WHERE", "(", "category", "=", "'食料'", "OR", "category", "=", "'医療'", ")", "AND", "price", ">=", "1000", "'燃料'", "<=", "weight", "500"],
+    solution: ["SELECT", "name", "FROM", "cargo", "WHERE", "(", "category", "=", "'食料'", "OR", "category", "=", "'医療'", ")", "AND", "price", ">=", "1000"] },
+  { id: "cargo-12", theme: "cargo", stage: 9, stageName: "上級2：複合条件（優先順位）",
+    title: "機械全便とルナ行き燃料",
+    client: "船長「機械は全便、それとルナ港行きの燃料を出してくれ。カッコなしで表現できるはずだ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "name", "FROM", "cargo", "WHERE", "category", "=", "'機械'", "OR", "category", "=", "'燃料'", "AND", "dest", "=", "'ルナ港'", "(", ")", "'食料'", "'タイタン港'"],
+    solution: ["SELECT", "name", "FROM", "cargo", "WHERE", "category", "=", "'機械'", "OR", "category", "=", "'燃料'", "AND", "dest", "=", "'ルナ港'"] },
+  { id: "cargo-13", theme: "cargo", stage: 9, stageName: "上級3：HAVING",
+    title: "平均運賃の高い分類",
+    client: "経理担当「分類ごとの平均運賃を出して、2000以上の分類だけ見せてくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "category", "AVG(price)", "FROM", "cargo", "GROUP BY", "category", "HAVING", "AVG(price)", ">=", "2000", "SUM(price)", "1000", "COUNT(*)", "WHERE"],
+    solution: ["SELECT", "category", "AVG(price)", "FROM", "cargo", "GROUP BY", "category", "HAVING", "AVG(price)", ">=", "2000"] },
+  { id: "cargo-14", theme: "cargo", stage: 9, stageName: "上級4：HAVING応用",
+    title: "荷物の多い寄港地",
+    client: "船長「寄港地ごとに重量の合計を出して、3000以上の港だけ見せてくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest", "HAVING", "SUM(weight)", ">=", "3000", "AVG(weight)", "2000", "COUNT(*)"],
+    solution: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest", "HAVING", "SUM(weight)", ">=", "3000"] },
+  { id: "cargo-15", theme: "cargo", stage: 9, stageName: "上級5：ピボット変換",
+    title: "分類×寄港地の重量表",
+    client: "船長「分類を行、寄港地を列にして、重量の合計の表を作ってくれ」",
+    tables: cargoTables(false),
+    tiles: ["SELECT", "category", "PIVOT", "SUM(weight)", "FOR", "dest", "FROM", "cargo", "COUNT(*)", "GROUP BY", "price"],
+    solution: ["SELECT", "category", "PIVOT", "SUM(weight)", "FOR", "dest", "FROM", "cargo"] },
+  { id: "eco-11", theme: "ecology", stage: 9, stageName: "上級1：複合条件（カッコ）",
+    title: "森と山岳の危険種",
+    client: "調査リーダー「森か山岳に棲んで、危険度2以上のモンスターの名前を頼む」",
+    tables: ecoTables(false),
+    tiles: ["SELECT", "name", "FROM", "monsters", "WHERE", "(", "habitat", "=", "'森'", "OR", "habitat", "=", "'山岳'", ")", "AND", "danger", ">=", "2", "'湖'", "<=", "kind", "5"],
+    solution: ["SELECT", "name", "FROM", "monsters", "WHERE", "(", "habitat", "=", "'森'", "OR", "habitat", "=", "'山岳'", ")", "AND", "danger", ">=", "2"] },
+  { id: "eco-12", theme: "ecology", stage: 9, stageName: "上級2：複合条件（優先順位）",
+    title: "獣全種とよく見る鳥",
+    client: "調査リーダー「獣は全種、それと観測数30以上の鳥を出してくれ。カッコなしで表現できるはずだ」",
+    tables: ecoTables(false),
+    tiles: ["SELECT", "name", "FROM", "monsters", "WHERE", "kind", "=", "'獣'", "OR", "kind", "=", "'鳥'", "AND", "sightings", ">=", "30", "(", ")", "'水棲'", "<="],
+    solution: ["SELECT", "name", "FROM", "monsters", "WHERE", "kind", "=", "'獣'", "OR", "kind", "=", "'鳥'", "AND", "sightings", ">=", "30"] },
+  { id: "eco-13", theme: "ecology", stage: 9, stageName: "上級3：HAVING",
+    title: "観測数の多い分類",
+    client: "調査リーダー「分類ごとに観測数の合計を出して、50以上の分類だけ見せてくれ」",
+    tables: ecoTables(false),
+    tiles: ["SELECT", "kind", "SUM(sightings)", "FROM", "monsters", "GROUP BY", "kind", "HAVING", "SUM(sightings)", ">=", "50", "COUNT(*)", "30", "AVG(sightings)"],
+    solution: ["SELECT", "kind", "SUM(sightings)", "FROM", "monsters", "GROUP BY", "kind", "HAVING", "SUM(sightings)", ">=", "50"] },
+  { id: "eco-14", theme: "ecology", stage: 9, stageName: "上級4：HAVING応用",
+    title: "危険種が2種以上いる生息地",
+    client: "調査リーダー「危険度2以上に限って生息地ごとの種類数を数え、2種以上いる生息地だけ見せてくれ」",
+    tables: ecoTables(false),
+    tiles: ["SELECT", "habitat", "COUNT(*)", "FROM", "monsters", "WHERE", "danger", ">=", "2", "GROUP BY", "habitat", "HAVING", "COUNT(*)", ">=", "2", "SUM(sightings)", "3", "ORDER BY"],
+    solution: ["SELECT", "habitat", "COUNT(*)", "FROM", "monsters", "WHERE", "danger", ">=", "2", "GROUP BY", "habitat", "HAVING", "COUNT(*)", ">=", "2"] },
+  { id: "eco-15", theme: "ecology", stage: 9, stageName: "上級5：ピボット変換",
+    title: "生息地×分類の種類数表",
+    client: "調査リーダー「生息地を行、分類を列にして、種類数の表を作ってくれ」",
+    tables: ecoTables(false),
+    tiles: ["SELECT", "habitat", "PIVOT", "COUNT(*)", "FOR", "kind", "FROM", "monsters", "SUM(sightings)", "GROUP BY", "danger"],
+    solution: ["SELECT", "habitat", "PIVOT", "COUNT(*)", "FOR", "kind", "FROM", "monsters"] },
+  { id: "sco-11", theme: "scout", stage: 9, stageName: "上級1：複合条件（カッコ）",
+    title: "若手の攻撃陣",
+    client: "スカウト部長「FWかMFで、21歳以下の選手の名前を頼む」",
+    tables: scoutTables(false),
+    tiles: ["SELECT", "name", "FROM", "players", "WHERE", "(", "pos", "=", "'FW'", "OR", "pos", "=", "'MF'", ")", "AND", "age", "<=", "21", "'DF'", ">=", "goals", "25"],
+    solution: ["SELECT", "name", "FROM", "players", "WHERE", "(", "pos", "=", "'FW'", "OR", "pos", "=", "'MF'", ")", "AND", "age", "<=", "21"] },
+  { id: "sco-12", theme: "scout", stage: 9, stageName: "上級2：複合条件（優先順位）",
+    title: "青葉全員とベテランGK",
+    client: "スカウト部長「青葉FCは全員、それと25歳以上のGKを出してくれ。カッコなしで表現できるはずだ」",
+    tables: scoutTables(false),
+    tiles: ["SELECT", "name", "FROM", "players", "WHERE", "team", "=", "'青葉FC'", "OR", "pos", "=", "'GK'", "AND", "age", ">=", "25", "(", ")", "'港南ユナイテッド'", "<="],
+    solution: ["SELECT", "name", "FROM", "players", "WHERE", "team", "=", "'青葉FC'", "OR", "pos", "=", "'GK'", "AND", "age", ">=", "25"] },
+  { id: "sco-13", theme: "scout", stage: 9, stageName: "上級3：HAVING",
+    title: "総得点30以上のチーム",
+    client: "スカウト部長「チームごとの総得点を出して、30以上のチームだけ見せてくれ」",
+    tables: scoutTables(false),
+    tiles: ["SELECT", "team", "SUM(goals)", "FROM", "players", "GROUP BY", "team", "HAVING", "SUM(goals)", ">=", "30", "COUNT(*)", "20", "AVG(goals)"],
+    solution: ["SELECT", "team", "SUM(goals)", "FROM", "players", "GROUP BY", "team", "HAVING", "SUM(goals)", ">=", "30"] },
+  { id: "sco-14", theme: "scout", stage: 9, stageName: "上級4：HAVING応用",
+    title: "若手が2人以上いるポジション",
+    client: "スカウト部長「24歳以下に限ってポジションごとの人数を数え、2人以上いるポジションだけ見せてくれ」",
+    tables: scoutTables(false),
+    tiles: ["SELECT", "pos", "COUNT(*)", "FROM", "players", "WHERE", "age", "<=", "24", "GROUP BY", "pos", "HAVING", "COUNT(*)", ">=", "2", "SUM(goals)", "3", "ORDER BY"],
+    solution: ["SELECT", "pos", "COUNT(*)", "FROM", "players", "WHERE", "age", "<=", "24", "GROUP BY", "pos", "HAVING", "COUNT(*)", ">=", "2"] },
+  { id: "sco-15", theme: "scout", stage: 9, stageName: "上級5：ピボット変換",
+    title: "チーム×ポジション得点表",
+    client: "スカウト部長「チームを行、ポジションを列にして、得点の合計の表を作ってくれ」",
+    tables: scoutTables(false),
+    tiles: ["SELECT", "team", "PIVOT", "SUM(goals)", "FOR", "pos", "FROM", "players", "COUNT(*)", "GROUP BY", "age"],
+    solution: ["SELECT", "team", "PIVOT", "SUM(goals)", "FOR", "pos", "FROM", "players"] },
+  { id: "rui-11", theme: "ruins", stage: 9, stageName: "上級1：複合条件（カッコ）",
+    title: "浅い層の貴金属",
+    client: "発掘リーダー「金か銀の素材で、深さ6m以内の遺物の名前を頼む」",
+    tables: ruinsTables(false),
+    tiles: ["SELECT", "name", "FROM", "artifacts", "WHERE", "(", "material", "=", "'金'", "OR", "material", "=", "'銀'", ")", "AND", "depth", "<=", "6", "'青銅'", ">=", "era", "10"],
+    solution: ["SELECT", "name", "FROM", "artifacts", "WHERE", "(", "material", "=", "'金'", "OR", "material", "=", "'銀'", ")", "AND", "depth", "<=", "6"] },
+  { id: "rui-12", theme: "ruins", stage: 9, stageName: "上級2：複合条件（優先順位）",
+    title: "古代王国全品とB区画の青銅",
+    client: "発掘リーダー「古代王国は全品、それとB区画の青銅製品を出してくれ。カッコなしで表現できるはずだ」",
+    tables: ruinsTables(false),
+    tiles: ["SELECT", "name", "FROM", "artifacts", "WHERE", "era", "=", "'古代王国'", "OR", "material", "=", "'青銅'", "AND", "site", "=", "'B区画'", "(", ")", "'後期王国'", "'A区画'"],
+    solution: ["SELECT", "name", "FROM", "artifacts", "WHERE", "era", "=", "'古代王国'", "OR", "material", "=", "'青銅'", "AND", "site", "=", "'B区画'"] },
+  { id: "rui-13", theme: "ruins", stage: 9, stageName: "上級3：HAVING",
+    title: "出土数の多い時代",
+    client: "発掘リーダー「時代ごとの出土数を数えて、4点以上ある時代だけ見せてくれ」",
+    tables: ruinsTables(false),
+    tiles: ["SELECT", "era", "COUNT(*)", "FROM", "artifacts", "GROUP BY", "era", "HAVING", "COUNT(*)", ">=", "4", "SUM(depth)", "3", "AVG(depth)"],
+    solution: ["SELECT", "era", "COUNT(*)", "FROM", "artifacts", "GROUP BY", "era", "HAVING", "COUNT(*)", ">=", "4"] },
+  { id: "rui-14", theme: "ruins", stage: 9, stageName: "上級4：HAVING応用",
+    title: "平均深度の深い区画",
+    client: "発掘リーダー「区画ごとに平均の深さを出して、6m以上の区画だけ見せてくれ」",
+    tables: ruinsTables(false),
+    tiles: ["SELECT", "site", "AVG(depth)", "FROM", "artifacts", "GROUP BY", "site", "HAVING", "AVG(depth)", ">=", "6", "COUNT(*)", "5", "SUM(depth)"],
+    solution: ["SELECT", "site", "AVG(depth)", "FROM", "artifacts", "GROUP BY", "site", "HAVING", "AVG(depth)", ">=", "6"] },
+  { id: "rui-15", theme: "ruins", stage: 9, stageName: "上級5：ピボット変換",
+    title: "時代×素材の出土数表",
+    client: "発掘リーダー「時代を行、素材を列にして、出土数の表を作ってくれ」",
+    tables: ruinsTables(false),
+    tiles: ["SELECT", "era", "PIVOT", "COUNT(*)", "FOR", "material", "FROM", "artifacts", "SUM(depth)", "GROUP BY", "site"],
+    solution: ["SELECT", "era", "PIVOT", "COUNT(*)", "FOR", "material", "FROM", "artifacts"] },
+  { id: "wea-11", theme: "weather", stage: 9, stageName: "上級1：複合条件（カッコ）",
+    title: "晴れ曇りで風の強い日",
+    client: "観測所長「晴れか曇りで、風速4以上の日の日付を頼む」",
+    tables: weatherTables(false),
+    tiles: ["SELECT", "day", "FROM", "weather", "WHERE", "(", "sky", "=", "'晴れ'", "OR", "sky", "=", "'曇り'", ")", "AND", "wind", ">=", "4", "'雨'", "<=", "temp", "2"],
+    solution: ["SELECT", "day", "FROM", "weather", "WHERE", "(", "sky", "=", "'晴れ'", "OR", "sky", "=", "'曇り'", ")", "AND", "wind", ">=", "4"] },
+  { id: "wea-12", theme: "weather", stage: 9, stageName: "上級2：複合条件（優先順位）",
+    title: "雨の日と暖かい晴れの日",
+    client: "観測所長「雨は全日、それと気温18度以上の晴れの日を出してくれ。カッコなしで表現できるはずだ」",
+    tables: weatherTables(false),
+    tiles: ["SELECT", "day", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "OR", "sky", "=", "'晴れ'", "AND", "temp", ">=", "18", "(", ")", "'曇り'", "<="],
+    solution: ["SELECT", "day", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "OR", "sky", "=", "'晴れ'", "AND", "temp", ">=", "18"] },
+  { id: "wea-13", theme: "weather", stage: 9, stageName: "上級3：HAVING",
+    title: "3日以上あった天気",
+    client: "観測所長「天気ごとの日数を数えて、3日以上あった天気だけ見せてくれ」",
+    tables: weatherTables(false),
+    tiles: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "3", "SUM(rain)", "2", "AVG(temp)"],
+    solution: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "3"] },
+  { id: "wea-14", theme: "weather", stage: 9, stageName: "上級4：HAVING応用",
+    title: "雨の降らなかった天気",
+    client: "観測所長「雨量0の日に限って天気ごとの日数を数え、2日以上ある天気だけ見せてくれ」",
+    tables: weatherTables(false),
+    tiles: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "WHERE", "rain", "=", "0", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "2", "SUM(wind)", "4", "ORDER BY"],
+    solution: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "WHERE", "rain", "=", "0", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "2"] },
+  { id: "wea-15", theme: "weather", stage: 9, stageName: "上級5：ピボット変換",
+    title: "観測者×天気の担当表",
+    client: "観測所長「観測記録と当番表をつないで、観測者を行、天気を列にした担当日数の表を作ってくれ」",
+    tables: weatherTables(true),
+    tiles: ["SELECT", "observer", "PIVOT", "COUNT(*)", "FOR", "sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day", "SUM(temp)", "GROUP BY", "weather.temp", "shifts.observer"],
+    solution: ["SELECT", "observer", "PIVOT", "COUNT(*)", "FOR", "sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day"] }
 ];
 // === CORE END ===
 
