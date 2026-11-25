@@ -97,7 +97,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.6.5<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.7<br>ワードタイルを並べてSQLを組み立てるパズル</p>
     <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
@@ -339,7 +339,13 @@ function runQuery(quest, tokens){
   if (!tables[q.table]) throw new Error("テーブル " + q.table + " はこのクエストにありません");
   const allCols = new Set();
   Object.keys(tables).forEach((tn) => { tables[tn].columns.forEach((c) => { allCols.add(c); allCols.add(tn + "." + c); }); });
-  const checkCol = (c) => { if (!allCols.has(c)) throw new Error("列 " + c + " はありません"); };
+  const ambiguousCols = new Set();
+  if (Object.keys(tables).length > 1){
+    const colCount = {};
+    Object.keys(tables).forEach((tn) => { tables[tn].columns.forEach((c) => { colCount[c] = (colCount[c] || 0) + 1; }); });
+    Object.keys(colCount).forEach((c) => { if (colCount[c] > 1) ambiguousCols.add(c); });
+  }
+  const checkCol = (c) => { if (!allCols.has(c)) throw new Error("列 " + c + " はありません"); if (ambiguousCols.has(c)) throw new Error("列 " + c + " は複数の表にあるので、表名をつけてください"); };
   const checkAgg = (tok) => { const a = AGG_RE.exec(tok)[2]; if (a !== "*") checkCol(a); };
   q.cols.forEach((c) => { if (c === "*") return; if (tokenKind(c) === "agg") checkAgg(c); else checkCol(c); });
   q.where.forEach((w) => checkCol(w.col));
@@ -502,7 +508,7 @@ const CARGO_ROWS = [
   ["観測ドローン", "機械", 240, "ルナ港", 3100],
   ["種子バンク", "食料", 60, "タイタン港", 2000],
   ["抗生物質", "医療", 45, "ルナ港", 700],
-  ["冷却材", "燃料", 720, "マーズ港", 1300]
+  ["液体水素", "燃料", 720, "マーズ港", 1300]
 ];
 const PORTS_COLUMNS = ["name", "sector"];
 const PORTS_ROWS = [
@@ -522,7 +528,7 @@ const MONSTERS_ROWS = [
   ["モフモフ", "獣", "森", 34, 1],
   ["ガルル", "獣", "森", 12, 4],
   ["ピヨリン", "鳥", "草原", 58, 1],
-  ["ズバットモドキ", "鳥", "洞窟", 23, 2],
+  ["ヨルモドキ", "鳥", "洞窟", 23, 2],
   ["ヌッシー", "水棲", "湖", 7, 3],
   ["カニタンク", "水棲", "湖", 19, 2],
   ["ホネホネ", "アンデッド", "洞窟", 15, 5],
@@ -560,7 +566,7 @@ const PLAYERS_ROWS = [
   ["伊藤楓", "MF", 18, 5, "青葉FC"],
   ["渡辺澪", "DF", 30, 2, "港南ユナイテッド"],
   ["木村光", "GK", 23, 0, "青葉FC"],
-  ["林奏", "FW", 26, 7, "港南ユナイテッド"]
+  ["藤井奏", "FW", 26, 7, "港南ユナイテッド"]
 ];
 const TEAMS_COLUMNS = ["name", "city"];
 const TEAMS_ROWS = [
@@ -689,14 +695,14 @@ const QUESTS = [
     solution: ["SELECT", "name", "job", "FROM", "adventurers", "WHERE", "job", "=", "'僧侶'", "OR", "job", "=", "'盗賊'"] },
   { id: "guild-10", theme: "guild", stage: 4, stageName: "階段4：総合",
     title: "組合費の相談",
-    client: "ギルドマスター「所持金400以上の人の名前と所持金を、所持金の少ない順に並べてくれ」",
+    client: "ギルドマスター「レベル10以上で、所持金400以上の人の名前と所持金を、所持金の少ない順に並べてくれ」",
     table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
-    tiles: ["SELECT", "name", "gold", "gold", "gold", "FROM", "adventurers", "WHERE", ">=", "400", "ORDER BY", "ASC", "DESC", "100", "level"],
-    solution: ["SELECT", "name", "gold", "FROM", "adventurers", "WHERE", "gold", ">=", "400", "ORDER BY", "gold", "ASC"] },
+    tiles: ["SELECT", "name", "gold", "gold", "gold", "FROM", "adventurers", "WHERE", "level", ">=", "10", "AND", ">=", "400", "ORDER BY", "ASC", "DESC", "100"],
+    solution: ["SELECT", "name", "gold", "FROM", "adventurers", "WHERE", "level", ">=", "10", "AND", "gold", ">=", "400", "ORDER BY", "gold", "ASC"] },
 
   { id: "cargo-01", theme: "cargo", stage: 5, stageName: "階段5：LIKE",
     title: "燃料の積荷を探して",
-    client: "積荷係の先輩「『燃料』って名前の入った積荷を探してくれ。品名だけでいい」",
+    client: "積荷係の先輩「品名に『燃料』を含む積荷を探してくれ。品名だけでいい」",
     tables: cargoTables(false),
     tiles: ["SELECT", "name", "name", "FROM", "cargo", "WHERE", "LIKE", "'%燃料%'", "=", "'%医療%'", "category"],
     solution: ["SELECT", "name", "FROM", "cargo", "WHERE", "name", "LIKE", "'%燃料%'"] },
@@ -712,12 +718,12 @@ const QUESTS = [
     tables: cargoTables(false),
     tiles: ["SELECT", "COUNT(*)", "FROM", "cargo", "name", "SUM(weight)"],
     solution: ["SELECT", "COUNT(*)", "FROM", "cargo"] },
-  { id: "cargo-04", theme: "cargo", stage: 6, stageName: "階段6：集計 SUM",
-    title: "総重量を出して",
-    client: "船長「船のバランスを見る。積荷全体の重量の合計を出してくれ」",
+  { id: "cargo-04", theme: "cargo", stage: 6, stageName: "階段6：集計 AVG",
+    title: "平均の重量を出して",
+    client: "船長「船のバランスを見る。積荷の平均の重量を出してくれ」",
     tables: cargoTables(false),
     tiles: ["SELECT", "SUM(weight)", "FROM", "cargo", "COUNT(*)", "AVG(weight)", "price"],
-    solution: ["SELECT", "SUM(weight)", "FROM", "cargo"] },
+    solution: ["SELECT", "AVG(weight)", "FROM", "cargo"] },
   { id: "cargo-05", theme: "cargo", stage: 6, stageName: "階段6：GROUP BY",
     title: "分類ごとの件数",
     client: "積荷係の先輩「分類ごとに何件あるか数えてくれ。分類と件数の一覧で頼む」",
@@ -734,13 +740,13 @@ const QUESTS = [
     title: "どの宙域へ行く？",
     client: "航海士「各積荷がどの宙域へ行くのか知りたい。寄港地の表とつないで、品名と宙域の一覧を頼む」",
     tables: cargoTables(true),
-    tiles: ["SELECT", "cargo.name", "ports.sector", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name", "cargo.weight", "dest"],
+    tiles: ["SELECT", "cargo.name", "ports.sector", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name", "cargo.weight", "name"],
     solution: ["SELECT", "cargo.name", "ports.sector", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name"] },
   { id: "cargo-08", theme: "cargo", stage: 7, stageName: "階段7：JOIN＋WHERE",
     title: "月軌道あての積荷",
     client: "船長「月軌道あての積荷を確認したい。品名と届け先を見せてくれ」",
     tables: cargoTables(true),
-    tiles: ["SELECT", "cargo.name", "cargo.dest", "cargo.dest", "FROM", "cargo", "JOIN", "ports", "ON", "=", "=", "ports.name", "WHERE", "ports.sector", "'月軌道'", "'火星軌道'", "sector"],
+    tiles: ["SELECT", "cargo.name", "cargo.dest", "cargo.dest", "FROM", "cargo", "JOIN", "ports", "ON", "=", "=", "ports.name", "WHERE", "ports.sector", "'月軌道'", "'火星軌道'", "name"],
     solution: ["SELECT", "cargo.name", "cargo.dest", "FROM", "cargo", "JOIN", "ports", "ON", "cargo.dest", "=", "ports.name", "WHERE", "ports.sector", "=", "'月軌道'"] },
   { id: "cargo-09", theme: "cargo", stage: 8, stageName: "階段8：副問い合わせ",
     title: "平均より重い積荷",
@@ -794,13 +800,13 @@ const QUESTS = [
     title: "生息地はどの地方？",
     client: "調査リーダー「生息地の表とつないで、各モンスターがどの地方で見られるか、名前と地方の一覧を頼む」",
     tables: ecoTables(true),
-    tiles: ["SELECT", "monsters.name", "areas.region", "FROM", "monsters", "JOIN", "areas", "ON", "monsters.habitat", "=", "areas.name", "monsters.kind", "habitat"],
+    tiles: ["SELECT", "monsters.name", "areas.region", "FROM", "monsters", "JOIN", "areas", "ON", "monsters.habitat", "=", "areas.name", "monsters.kind", "name"],
     solution: ["SELECT", "monsters.name", "areas.region", "FROM", "monsters", "JOIN", "areas", "ON", "monsters.habitat", "=", "areas.name"] },
   { id: "eco-08", theme: "ecology", stage: 7, stageName: "応用：JOIN＋WHERE",
     title: "北部のモンスター",
     client: "調査リーダー「北部の地方で見られるモンスターの、名前と生息地を見せてくれ」",
     tables: ecoTables(true),
-    tiles: ["SELECT", "monsters.name", "monsters.habitat", "monsters.habitat", "FROM", "monsters", "JOIN", "areas", "ON", "=", "=", "areas.name", "WHERE", "areas.region", "'北部'", "'南部'", "region"],
+    tiles: ["SELECT", "monsters.name", "monsters.habitat", "monsters.habitat", "FROM", "monsters", "JOIN", "areas", "ON", "=", "=", "areas.name", "WHERE", "areas.region", "'北部'", "'南部'", "name"],
     solution: ["SELECT", "monsters.name", "monsters.habitat", "FROM", "monsters", "JOIN", "areas", "ON", "monsters.habitat", "=", "areas.name", "WHERE", "areas.region", "=", "'北部'"] },
   { id: "eco-09", theme: "ecology", stage: 8, stageName: "応用：副問い合わせ",
     title: "平均より危険",
@@ -855,13 +861,13 @@ const QUESTS = [
     title: "本拠地はどこ？",
     client: "スカウト助手「チームの表とつないで、各選手の本拠地が分かるよう、名前と都市の一覧をください」",
     tables: scoutTables(true),
-    tiles: ["SELECT", "players.name", "teams.city", "FROM", "players", "JOIN", "teams", "ON", "players.team", "=", "teams.name", "players.goals", "team"],
+    tiles: ["SELECT", "players.name", "teams.city", "FROM", "players", "JOIN", "teams", "ON", "players.team", "=", "teams.name", "players.goals", "name"],
     solution: ["SELECT", "players.name", "teams.city", "FROM", "players", "JOIN", "teams", "ON", "players.team", "=", "teams.name"] },
   { id: "sco-08", theme: "scout", stage: 7, stageName: "応用：JOIN＋WHERE",
     title: "港南の選手",
     client: "監督「本拠地が港南市のチームの選手の、名前と所属チームを見せてくれ」",
     tables: scoutTables(true),
-    tiles: ["SELECT", "players.name", "players.team", "players.team", "FROM", "players", "JOIN", "teams", "ON", "=", "=", "teams.name", "WHERE", "teams.city", "'港南市'", "'青葉市'", "city"],
+    tiles: ["SELECT", "players.name", "players.team", "players.team", "FROM", "players", "JOIN", "teams", "ON", "=", "=", "teams.name", "WHERE", "teams.city", "'港南市'", "'青葉市'", "name"],
     solution: ["SELECT", "players.name", "players.team", "FROM", "players", "JOIN", "teams", "ON", "players.team", "=", "teams.name", "WHERE", "teams.city", "=", "'港南市'"] },
   { id: "sco-09", theme: "scout", stage: 8, stageName: "応用：副問い合わせ",
     title: "平均より決める選手",
@@ -873,7 +879,7 @@ const QUESTS = [
     title: "最年少の選手",
     client: "監督「一番若い選手は誰だ？ 名前と年齢を見せてくれ」",
     tables: scoutTables(false),
-    tiles: ["SELECT", "SELECT", "name", "age", "age", "FROM", "FROM", "players", "players", "WHERE", "=", "(", "MIN(age)", ")", "AVG(age)", "18"],
+    tiles: ["SELECT", "SELECT", "name", "age", "age", "FROM", "FROM", "players", "players", "WHERE", "=", "(", "MIN(age)", ")", "AVG(age)", "19"],
     solution: ["SELECT", "name", "age", "FROM", "players", "WHERE", "age", "=", "(", "SELECT", "MIN(age)", "FROM", "players", ")"] },
 
   { id: "rui-01", theme: "ruins", stage: 2, stageName: "応用：WHERE",
@@ -889,7 +895,7 @@ const QUESTS = [
     tiles: ["SELECT", "name", "depth", "depth", "FROM", "artifacts", "ORDER BY", "DESC", "LIMIT", "3", "5", "ASC", "era"],
     solution: ["SELECT", "name", "depth", "FROM", "artifacts", "ORDER BY", "depth", "DESC", "LIMIT", "3"] },
   { id: "rui-03", theme: "ruins", stage: 5, stageName: "応用：LIKE",
-    title: "板のつく遺物",
+    title: "板で終わる遺物",
     client: "記録係「名前の最後が『板』の遺物の名前を教えてください」",
     tables: ruinsTables(false),
     tiles: ["SELECT", "name", "name", "FROM", "artifacts", "WHERE", "LIKE", "'%板'", "'板%'", "=", "site"],
@@ -916,13 +922,13 @@ const QUESTS = [
     title: "区画はどのエリア？",
     client: "記録係「区画の表とつないで、各遺物がどのエリアで出土したか、名前とエリアの一覧をください」",
     tables: ruinsTables(true),
-    tiles: ["SELECT", "artifacts.name", "sites.zone", "FROM", "artifacts", "JOIN", "sites", "ON", "artifacts.site", "=", "sites.name", "artifacts.depth", "site"],
+    tiles: ["SELECT", "artifacts.name", "sites.zone", "FROM", "artifacts", "JOIN", "sites", "ON", "artifacts.site", "=", "sites.name", "artifacts.depth", "name"],
     solution: ["SELECT", "artifacts.name", "sites.zone", "FROM", "artifacts", "JOIN", "sites", "ON", "artifacts.site", "=", "sites.name"] },
   { id: "rui-08", theme: "ruins", stage: 7, stageName: "応用：JOIN＋WHERE",
     title: "南エリアの遺物",
     client: "発掘リーダー「南エリアで出土した遺物の、名前と発掘区画を見せてくれ」",
     tables: ruinsTables(true),
-    tiles: ["SELECT", "artifacts.name", "artifacts.site", "artifacts.site", "FROM", "artifacts", "JOIN", "sites", "ON", "=", "=", "sites.name", "WHERE", "sites.zone", "'南エリア'", "'北エリア'", "zone"],
+    tiles: ["SELECT", "artifacts.name", "artifacts.site", "artifacts.site", "FROM", "artifacts", "JOIN", "sites", "ON", "=", "=", "sites.name", "WHERE", "sites.zone", "'南エリア'", "'北エリア'", "name"],
     solution: ["SELECT", "artifacts.name", "artifacts.site", "FROM", "artifacts", "JOIN", "sites", "ON", "artifacts.site", "=", "sites.name", "WHERE", "sites.zone", "=", "'南エリア'"] },
   { id: "rui-09", theme: "ruins", stage: 8, stageName: "応用：副問い合わせ",
     title: "平均より深い遺物",
@@ -934,7 +940,7 @@ const QUESTS = [
     title: "最も深い遺物",
     client: "発掘リーダー「一番深い場所から出た遺物はどれだ？ 名前と深度を見せてくれ」",
     tables: ruinsTables(false),
-    tiles: ["SELECT", "SELECT", "name", "depth", "depth", "FROM", "FROM", "artifacts", "artifacts", "WHERE", "=", "(", "MAX(depth)", ")", "AVG(depth)", "12"],
+    tiles: ["SELECT", "SELECT", "name", "depth", "depth", "FROM", "FROM", "artifacts", "artifacts", "WHERE", "=", "(", "MAX(depth)", ")", "AVG(depth)", "11"],
     solution: ["SELECT", "name", "depth", "FROM", "artifacts", "WHERE", "depth", "=", "(", "SELECT", "MAX(depth)", "FROM", "artifacts", ")"] },
 
   { id: "wea-01", theme: "weather", stage: 2, stageName: "応用：WHERE",
@@ -950,8 +956,8 @@ const QUESTS = [
     tiles: ["SELECT", "day", "rain", "rain", "FROM", "weather", "ORDER BY", "DESC", "LIMIT", "3", "5", "ASC", "temp"],
     solution: ["SELECT", "day", "rain", "FROM", "weather", "ORDER BY", "rain", "DESC", "LIMIT", "3"] },
   { id: "wea-03", theme: "weather", stage: 5, stageName: "応用：LIKE",
-    title: "上旬の記録",
-    client: "記録係「11月上旬（1日〜9日）の記録の日付だけを教えてください」",
+    title: "1日〜9日の記録",
+    client: "記録係「日付が一桁の日（1日〜9日）の記録の日付だけを教えてください」",
     tables: weatherTables(false),
     tiles: ["SELECT", "day", "day", "FROM", "weather", "WHERE", "LIKE", "'2026-11-0%'", "'2026%'", "=", "temp"],
     solution: ["SELECT", "day", "FROM", "weather", "WHERE", "day", "LIKE", "'2026-11-0%'"] },
@@ -962,7 +968,7 @@ const QUESTS = [
     tiles: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "GROUP BY", "sky", "day", "SUM(rain)"],
     solution: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "GROUP BY", "sky"] },
   { id: "wea-05", theme: "weather", stage: 6, stageName: "応用：AVG",
-    title: "平均気温",
+    title: "最高気温の平均",
     client: "所長「この期間の最高気温の平均を出してくれ。平均だけ頼む」",
     tables: weatherTables(false),
     tiles: ["SELECT", "AVG(temp)", "FROM", "weather", "SUM(temp)", "MAX(temp)", "day"],
@@ -975,10 +981,10 @@ const QUESTS = [
     solution: ["SELECT", "day", "wind", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "AND", "wind", ">=", "7"] },
   { id: "wea-07", theme: "weather", stage: 7, stageName: "応用：JOIN",
     title: "担当者の記録",
-    client: "所長「当番の表とつないで、各日の観測担当が分かるよう、日付と担当者の一覧を頼む」",
+    client: "所長「当番の表とつないで、各日の天気と観測担当が分かるよう、日付と天気と担当者の一覧を頼む」",
     tables: weatherTables(true),
-    tiles: ["SELECT", "weather.day", "weather.day", "shifts.observer", "FROM", "weather", "JOIN", "shifts", "ON", "=", "shifts.day", "weather.temp", "day"],
-    solution: ["SELECT", "weather.day", "shifts.observer", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day"] },
+    tiles: ["SELECT", "weather.day", "weather.day", "weather.sky", "shifts.observer", "FROM", "weather", "JOIN", "shifts", "ON", "=", "shifts.day", "weather.temp", "day"],
+    solution: ["SELECT", "weather.day", "weather.sky", "shifts.observer", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day"] },
   { id: "wea-08", theme: "weather", stage: 7, stageName: "応用：JOIN＋WHERE",
     title: "相川さんの担当日",
     client: "所長「相川さんが担当した日の、日付と天気を見せてくれ」",
@@ -995,7 +1001,7 @@ const QUESTS = [
     title: "一番風の強い日",
     client: "所長「一番風速が大きかった日はどれだ？ 日付と風速を見せてくれ」",
     tables: weatherTables(false),
-    tiles: ["SELECT", "SELECT", "day", "wind", "wind", "FROM", "FROM", "weather", "weather", "WHERE", "=", "(", "MAX(wind)", ")", "AVG(wind)", "8"],
+    tiles: ["SELECT", "SELECT", "day", "wind", "wind", "FROM", "FROM", "weather", "weather", "WHERE", "=", "(", "MAX(wind)", ")", "AVG(wind)", "7"],
     solution: ["SELECT", "day", "wind", "FROM", "weather", "WHERE", "wind", "=", "(", "SELECT", "MAX(wind)", "FROM", "weather", ")"] },
   { id: "guild-11", theme: "guild", stage: 9, stageName: "上級1：複合条件（カッコ）",
     title: "前衛と盗賊の精鋭",
@@ -1016,11 +1022,11 @@ const QUESTS = [
     tiles: ["SELECT", "job", "SUM(gold)", "FROM", "adventurers", "GROUP BY", "job", "HAVING", "SUM(gold)", ">=", "1400", "COUNT(*)", "1000", "WHERE", "AVG(gold)"],
     solution: ["SELECT", "job", "SUM(gold)", "FROM", "adventurers", "GROUP BY", "job", "HAVING", "SUM(gold)", ">=", "1400"] },
   { id: "guild-14", theme: "guild", stage: 9, stageName: "上級4：HAVING応用",
-    title: "人数の多い職業（レベル5以上）",
-    client: "受付の先輩「レベル5以上に限って職業ごとの人数を数え、3人以上いる職業だけ見せてくれ」",
+    title: "人数の多い職業（レベル10以上）",
+    client: "受付の先輩「レベル10以上に限って職業ごとの人数を数え、2人以上いる職業だけ見せてくれ」",
     table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
-    tiles: ["SELECT", "job", "COUNT(*)", "FROM", "adventurers", "WHERE", "level", ">=", "5", "GROUP BY", "job", "HAVING", "COUNT(*)", ">=", "3", "SUM(gold)", "2", "ORDER BY", "DESC"],
-    solution: ["SELECT", "job", "COUNT(*)", "FROM", "adventurers", "WHERE", "level", ">=", "5", "GROUP BY", "job", "HAVING", "COUNT(*)", ">=", "3"] },
+    tiles: ["SELECT", "job", "COUNT(*)", "FROM", "adventurers", "WHERE", "level", ">=", "10", "GROUP BY", "job", "HAVING", "COUNT(*)", ">=", "2", "SUM(gold)", "3", "ORDER BY", "DESC", "5"],
+    solution: ["SELECT", "job", "COUNT(*)", "FROM", "adventurers", "WHERE", "level", ">=", "10", "GROUP BY", "job", "HAVING", "COUNT(*)", ">=", "2"] },
   { id: "guild-15", theme: "guild", stage: 9, stageName: "上級5：ピボット変換",
     title: "職業別の人数を横に",
     client: "受付の先輩「職業ごとの人数を、職業を列にして横に並べた表で見せてくれ」",
@@ -1049,7 +1055,7 @@ const QUESTS = [
     title: "荷物の多い寄港地",
     client: "船長「寄港地ごとに重量の合計を出して、3000以上の港だけ見せてくれ」",
     tables: cargoTables(false),
-    tiles: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest", "HAVING", "SUM(weight)", ">=", "3000", "AVG(weight)", "2000", "COUNT(*)"],
+    tiles: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest", "HAVING", "SUM(weight)", ">=", "3000", "AVG(weight)", "1000", "COUNT(*)"],
     solution: ["SELECT", "dest", "SUM(weight)", "FROM", "cargo", "GROUP BY", "dest", "HAVING", "SUM(weight)", ">=", "3000"] },
   { id: "cargo-15", theme: "cargo", stage: 9, stageName: "上級5：ピボット変換",
     title: "分類×寄港地の重量表",
@@ -1094,11 +1100,11 @@ const QUESTS = [
     tiles: ["SELECT", "name", "FROM", "players", "WHERE", "(", "pos", "=", "'FW'", "OR", "pos", "=", "'MF'", ")", "AND", "age", "<=", "21", "'DF'", ">=", "goals", "25"],
     solution: ["SELECT", "name", "FROM", "players", "WHERE", "(", "pos", "=", "'FW'", "OR", "pos", "=", "'MF'", ")", "AND", "age", "<=", "21"] },
   { id: "sco-12", theme: "scout", stage: 9, stageName: "上級2：複合条件（優先順位）",
-    title: "青葉全員とベテランGK",
-    client: "スカウト部長「青葉FCは全員、それと25歳以上のGKを出してくれ。カッコなしで表現できるはずだ」",
+    title: "青葉全員とベテランFW",
+    client: "スカウト部長「青葉FCは全員、それと25歳以上のFWを出してくれ。カッコなしで表現できるはずだ」",
     tables: scoutTables(false),
-    tiles: ["SELECT", "name", "FROM", "players", "WHERE", "team", "=", "'青葉FC'", "OR", "pos", "=", "'GK'", "AND", "age", ">=", "25", "(", ")", "'港南ユナイテッド'", "<="],
-    solution: ["SELECT", "name", "FROM", "players", "WHERE", "team", "=", "'青葉FC'", "OR", "pos", "=", "'GK'", "AND", "age", ">=", "25"] },
+    tiles: ["SELECT", "name", "FROM", "players", "WHERE", "team", "=", "'青葉FC'", "OR", "pos", "=", "'FW'", "AND", "age", ">=", "25", "(", ")", "'港南ユナイテッド'", "<=", "'GK'"],
+    solution: ["SELECT", "name", "FROM", "players", "WHERE", "team", "=", "'青葉FC'", "OR", "pos", "=", "'FW'", "AND", "age", ">=", "25"] },
   { id: "sco-13", theme: "scout", stage: 9, stageName: "上級3：HAVING",
     title: "総得点30以上のチーム",
     client: "スカウト部長「チームごとの総得点を出して、30以上のチームだけ見せてくれ」",
@@ -1118,11 +1124,11 @@ const QUESTS = [
     tiles: ["SELECT", "team", "PIVOT", "SUM(goals)", "FOR", "pos", "FROM", "players", "COUNT(*)", "GROUP BY", "age"],
     solution: ["SELECT", "team", "PIVOT", "SUM(goals)", "FOR", "pos", "FROM", "players"] },
   { id: "rui-11", theme: "ruins", stage: 9, stageName: "上級1：複合条件（カッコ）",
-    title: "浅い層の貴金属",
-    client: "発掘リーダー「金か銀の素材で、深さ6m以内の遺物の名前を頼む」",
+    title: "浅い層の金と石",
+    client: "発掘リーダー「金か石の素材で、深度5m以内の遺物の名前を頼む」",
     tables: ruinsTables(false),
-    tiles: ["SELECT", "name", "FROM", "artifacts", "WHERE", "(", "material", "=", "'金'", "OR", "material", "=", "'銀'", ")", "AND", "depth", "<=", "6", "'青銅'", ">=", "era", "10"],
-    solution: ["SELECT", "name", "FROM", "artifacts", "WHERE", "(", "material", "=", "'金'", "OR", "material", "=", "'銀'", ")", "AND", "depth", "<=", "6"] },
+    tiles: ["SELECT", "name", "FROM", "artifacts", "WHERE", "(", "material", "=", "'金'", "OR", "material", "=", "'石'", ")", "AND", "depth", "<=", "5", "'銀'", "6", "'青銅'", ">=", "era", "10"],
+    solution: ["SELECT", "name", "FROM", "artifacts", "WHERE", "(", "material", "=", "'金'", "OR", "material", "=", "'石'", ")", "AND", "depth", "<=", "5"] },
   { id: "rui-12", theme: "ruins", stage: 9, stageName: "上級2：複合条件（優先順位）",
     title: "古代王国全品とB区画の青銅",
     client: "発掘リーダー「古代王国は全品、それとB区画の青銅製品を出してくれ。カッコなしで表現できるはずだ」",
@@ -1137,9 +1143,9 @@ const QUESTS = [
     solution: ["SELECT", "era", "COUNT(*)", "FROM", "artifacts", "GROUP BY", "era", "HAVING", "COUNT(*)", ">=", "4"] },
   { id: "rui-14", theme: "ruins", stage: 9, stageName: "上級4：HAVING応用",
     title: "平均深度の深い区画",
-    client: "発掘リーダー「区画ごとに平均の深さを出して、6m以上の区画だけ見せてくれ」",
+    client: "発掘リーダー「区画ごとに平均の深度を出して、6m以上の区画だけ見せてくれ」",
     tables: ruinsTables(false),
-    tiles: ["SELECT", "site", "AVG(depth)", "FROM", "artifacts", "GROUP BY", "site", "HAVING", "AVG(depth)", ">=", "6", "COUNT(*)", "5", "SUM(depth)"],
+    tiles: ["SELECT", "site", "AVG(depth)", "FROM", "artifacts", "GROUP BY", "site", "HAVING", "AVG(depth)", ">=", "6", "COUNT(*)", "7", "SUM(depth)"],
     solution: ["SELECT", "site", "AVG(depth)", "FROM", "artifacts", "GROUP BY", "site", "HAVING", "AVG(depth)", ">=", "6"] },
   { id: "rui-15", theme: "ruins", stage: 9, stageName: "上級5：ピボット変換",
     title: "時代×素材の出土数表",
@@ -1155,10 +1161,10 @@ const QUESTS = [
     solution: ["SELECT", "day", "FROM", "weather", "WHERE", "(", "sky", "=", "'晴れ'", "OR", "sky", "=", "'曇り'", ")", "AND", "wind", ">=", "4"] },
   { id: "wea-12", theme: "weather", stage: 9, stageName: "上級2：複合条件（優先順位）",
     title: "雨の日と暖かい晴れの日",
-    client: "観測所長「雨は全日、それと気温18度以上の晴れの日を出してくれ。カッコなしで表現できるはずだ」",
+    client: "観測所長「雨は全日、それと最高気温17度以上の晴れの日を出してくれ。カッコなしで表現できるはずだ」",
     tables: weatherTables(false),
-    tiles: ["SELECT", "day", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "OR", "sky", "=", "'晴れ'", "AND", "temp", ">=", "18", "(", ")", "'曇り'", "<="],
-    solution: ["SELECT", "day", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "OR", "sky", "=", "'晴れ'", "AND", "temp", ">=", "18"] },
+    tiles: ["SELECT", "day", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "OR", "sky", "=", "'晴れ'", "AND", "temp", ">=", "17", "(", ")", "'曇り'", "<="],
+    solution: ["SELECT", "day", "FROM", "weather", "WHERE", "sky", "=", "'雨'", "OR", "sky", "=", "'晴れ'", "AND", "temp", ">=", "17"] },
   { id: "wea-13", theme: "weather", stage: 9, stageName: "上級3：HAVING",
     title: "3日以上あった天気",
     client: "観測所長「天気ごとの日数を数えて、3日以上あった天気だけ見せてくれ」",
@@ -1167,16 +1173,16 @@ const QUESTS = [
     solution: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "3"] },
   { id: "wea-14", theme: "weather", stage: 9, stageName: "上級4：HAVING応用",
     title: "雨の降らなかった天気",
-    client: "観測所長「雨量0の日に限って天気ごとの日数を数え、2日以上ある天気だけ見せてくれ」",
+    client: "観測所長「降水量0の日に限って天気ごとの日数を数え、3日以上ある天気だけ見せてくれ」",
     tables: weatherTables(false),
-    tiles: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "WHERE", "rain", "=", "0", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "2", "SUM(wind)", "4", "ORDER BY"],
-    solution: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "WHERE", "rain", "=", "0", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "2"] },
+    tiles: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "WHERE", "rain", "=", "0", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "3", "SUM(wind)", "2", "ORDER BY"],
+    solution: ["SELECT", "sky", "COUNT(*)", "FROM", "weather", "WHERE", "rain", "=", "0", "GROUP BY", "sky", "HAVING", "COUNT(*)", ">=", "3"] },
   { id: "wea-15", theme: "weather", stage: 9, stageName: "上級5：ピボット変換",
     title: "観測者×天気の担当表",
     client: "観測所長「観測記録と当番表をつないで、観測者を行、天気を列にした担当日数の表を作ってくれ」",
     tables: weatherTables(true),
-    tiles: ["SELECT", "observer", "PIVOT", "COUNT(*)", "FOR", "sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day", "SUM(temp)", "GROUP BY", "weather.temp", "shifts.observer"],
-    solution: ["SELECT", "observer", "PIVOT", "COUNT(*)", "FOR", "sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day"] }
+    tiles: ["SELECT", "observer", "PIVOT", "COUNT(*)", "FOR", "sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day", "SUM(temp)", "GROUP BY", "weather.temp", "shifts.observer", "weather.sky"],
+    solution: ["SELECT", "shifts.observer", "PIVOT", "COUNT(*)", "FOR", "weather.sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day"] }
 ];
 // === CORE END ===
 
@@ -1243,7 +1249,7 @@ const QUESTS = [
 
   function renderDataTable(el, columns, rows){
     var html = "<tr>" + columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
-    rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
+    rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ if (typeof v === "number" && !Number.isInteger(v)) v = Math.round(v * 100) / 100; return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
     el.innerHTML = html;
   }
   function tileClass(text){
@@ -1395,7 +1401,7 @@ const QUESTS = [
       var t = document.createElement("table");
       t.className = "data";
       var html = "<tr>" + td.columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
-      td.rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
+      td.rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ if (typeof v === "number" && !Number.isInteger(v)) v = Math.round(v * 100) / 100; return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
       t.innerHTML = html;
       w.appendChild(t);
       wrap.appendChild(p); wrap.appendChild(w);
