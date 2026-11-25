@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SELECT * — Every Quest Is a Query</title>
+<meta name="description" content="ワードタイルを並べてSQLを組み立て、クエストを解くパズルゲーム。">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icon-180.png">
+<style>
+  :root{
+    --bg:#0b0e17; --panel:#131826; --panel2:#0e1220; --line:#2a3242;
+    --ink:#ece6d6; --sub:#9aa7bd; --gold:#e8b030; --accent:#6aa0e0;
+    --tile:#1d2740; --tileline:#3a4a6b; --good:#57c785; --bad:#e0685c;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;background:#05070c}
+  body{font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP",sans-serif; color:var(--ink)}
+  .wrap{max-width:480px; margin:0 auto; min-height:100dvh; background:var(--bg);
+    padding:calc(16px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+    box-shadow:0 0 0 1px #1a2132, 0 0 60px rgba(0,0,0,.8)}
+  .screen{display:none}
+  .screen.on{display:block}
+  /* タイトル画面 */
+  #scr-title{text-align:center; padding-top:12px}
+  #scr-title img.logo{display:block; width:min(100%,360px); height:auto; margin:0 auto;
+    border:3px solid #c0cadb; border-radius:18px; padding:6px; background:var(--panel2);
+    box-shadow:0 0 0 3px #0c0e13, 0 0 24px rgba(160,180,210,.25)}
+  .bigbtn{display:block; width:100%; margin:14px 0 0; padding:14px 16px; text-align:left;
+    font-size:16px; font-weight:700; color:var(--ink); background:var(--panel);
+    border:2px solid var(--line); border-radius:14px; cursor:pointer; white-space:nowrap; overflow:hidden}
+  .bigbtn:active{border-color:var(--gold)}
+  .bigbtn.primary{background:var(--gold); color:#0b0e17; border-color:var(--gold); text-align:center}
+  .bigbtn:disabled{opacity:.45; cursor:default}
+  .ver{margin-top:22px; font-size:11.5px; color:var(--sub)}
+  /* クエスト選択 */
+  h1.ttl{font-size:19px; margin:4px 0 2px; text-align:left}
+  .themehead{display:flex; gap:10px; align-items:center; margin:10px 0 4px}
+  .themehead img{width:54px; height:96px; object-fit:cover; border-radius:8px; border:2px solid var(--line)}
+  .themehead .tn{font-size:16px; font-weight:700}
+  .themehead .ts{font-size:12px; color:var(--sub); margin-top:2px; line-height:1.5}
+  .qbtn .st{float:right; font-size:12px; color:var(--gold)}
+  .qbtn .st.lock{color:var(--sub)}
+  .qbtn .st.clear{color:var(--good)}
+  /* ゲーム画面 */
+  #scr-game{margin:-16px -16px -24px; padding:calc(16px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+    background-size:cover; background-position:center top; background-attachment:scroll}
+  .panel{background:rgba(10,13,24,.88); border:2px solid var(--line); border-radius:14px; padding:12px 14px; margin:12px 0}
+  .qtitle{font-size:16px; font-weight:700; margin:0}
+  .qstage{font-size:11px; color:var(--gold); letter-spacing:.08em}
+  .client{font-size:13.5px; line-height:1.7; margin:6px 0 0}
+  .tblwrap{overflow-x:auto; margin-top:8px}
+  table.data{border-collapse:collapse; width:100%; font-size:12.5px}
+  table.data th, table.data td{border:1px solid var(--tileline); padding:4px 8px; text-align:left; white-space:nowrap}
+  table.data th{background:var(--tile); color:var(--accent); font-family:ui-monospace,Menlo,monospace; font-weight:700}
+  table.data td{font-family:ui-monospace,Menlo,monospace}
+  .secttl{font-size:12px; color:var(--sub); letter-spacing:.08em; margin:0 0 6px}
+  #assembly{min-height:52px; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start}
+  #assembly .empty{font-size:12.5px; color:var(--sub); padding:6px 2px}
+  #sqlprev{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--accent);
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:8px;
+    min-height:34px; word-break:break-all}
+  #palette{display:flex; flex-wrap:wrap; gap:6px}
+  .tile{display:inline-block; padding:8px 12px; border-radius:10px; background:var(--tile);
+    border:2px solid var(--tileline); color:var(--ink); font-family:ui-monospace,Menlo,monospace;
+    font-size:14px; font-weight:700; cursor:pointer; user-select:none; -webkit-user-select:none; touch-action:none}
+  .tile.kw{color:#8fc1ff}
+  .tile.val{color:#ffd97a}
+  .tile.op{color:#f2a0c0}
+  .tile.inasm{border-color:var(--gold)}
+  .dragghost{position:fixed; z-index:99; pointer-events:none; opacity:.92; transform:translate(-50%,-50%)}
+  .row2{display:flex; gap:10px}
+  .row2 .bigbtn{margin-top:12px}
+  #result{display:none}
+  #result.show{display:block}
+  #result .msg{font-size:14px; line-height:1.7}
+  #result.good{border-color:var(--good)}
+  #result.bad{border-color:var(--bad)}
+  .backlink{display:inline-block; margin-top:14px; font-size:13px; color:var(--accent); background:none; border:none; cursor:pointer; padding:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- タイトル画面 -->
+  <section id="scr-title" class="screen on">
+    <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
+    <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
+    <p class="ver">SELECT * ver. 0.1<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+  </section>
+
+  <!-- クエスト選択画面 -->
+  <section id="scr-select" class="screen">
+    <h1 class="ttl">クエスト選択</h1>
+    <div class="themehead">
+      <img src="assets/bg-guild.jpg" alt="冒険者ギルドの受付">
+      <div>
+        <div class="tn">冒険者ギルドの受付</div>
+        <div class="ts">ギルドの名簿係として、冒険者のデータを引き出すクエスト。全10問（パイロット）。</div>
+      </div>
+    </div>
+    <div id="qlist"></div>
+    <button class="backlink" id="btn-to-title">← タイトルへもどる</button>
+  </section>
+
+  <!-- ゲーム画面 -->
+  <section id="scr-game" class="screen">
+    <div class="panel">
+      <div class="qstage" id="g-stage"></div>
+      <p class="qtitle" id="g-title"></p>
+      <p class="client" id="g-client"></p>
+      <p class="secttl" id="g-tname" style="margin-top:10px"></p>
+      <div class="tblwrap"><table class="data" id="g-table"></table></div>
+    </div>
+
+    <div class="panel">
+      <p class="secttl">組み立て欄（タイルをタップ or ドラッグ）</p>
+      <div id="assembly"></div>
+      <div id="sqlprev"></div>
+      <div class="row2">
+        <button class="bigbtn primary" id="btn-run">実行する</button>
+        <button class="bigbtn" id="btn-clear">やり直す</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="secttl">タイル置き場</p>
+      <div id="palette"></div>
+    </div>
+
+    <div class="panel" id="result">
+      <p class="msg" id="result-msg"></p>
+      <div class="tblwrap"><table class="data" id="result-table"></table></div>
+      <button class="bigbtn primary" id="btn-next" style="display:none">次のクエストへ ▶</button>
+    </div>
+
+    <button class="backlink" id="btn-to-select">← クエスト選択へもどる</button>
+  </section>
+
+</div>
+<script>
+// === CORE START ===
+const KEYWORDS = new Set(["SELECT","FROM","WHERE","ORDER BY","LIMIT","AND","OR","ASC","DESC"]);
+const OPERATORS = new Set(["=","!=","<",">","<=",">="]);
+
+function tokenKind(tok){
+  if (KEYWORDS.has(tok)) return "kw";
+  if (OPERATORS.has(tok)) return "op";
+  if (tok === "*") return "star";
+  if (/^'.*'$/.test(tok)) return "str";
+  if (/^-?\d+(\.\d+)?$/.test(tok)) return "num";
+  return "ident";
+}
+function tokenValue(tok){
+  const k = tokenKind(tok);
+  if (k === "str") return tok.slice(1, -1);
+  if (k === "num") return Number(tok);
+  return tok;
+}
+
+function parseQuery(tokens){
+  let i = 0;
+  const peek = () => tokens[i];
+  const next = () => tokens[i++];
+  if (next() !== "SELECT") throw new Error("SELECT から始めてください");
+  const cols = [];
+  if (peek() === "*"){ next(); cols.push("*"); }
+  else { while (i < tokens.length && tokenKind(peek()) === "ident"){ cols.push(next()); } }
+  if (!cols.length) throw new Error("SELECT のあとに列を選んでください");
+  if (next() !== "FROM") throw new Error("列のあとに FROM が必要です");
+  const table = next();
+  if (!table || tokenKind(table) !== "ident") throw new Error("FROM のあとにテーブル名が必要です");
+  const q = { cols: cols, table: table, where: [], orderBy: null, limit: null };
+  if (peek() === "WHERE"){
+    next();
+    let join = null;
+    for (;;){
+      const col = next();
+      if (!col || tokenKind(col) !== "ident") throw new Error("WHERE の条件は「列 演算子 値」の形で並べてください");
+      const op = next();
+      if (!op || tokenKind(op) !== "op") throw new Error("条件には演算子（= や >= など）が必要です");
+      const valTok = next();
+      const vk = valTok && tokenKind(valTok);
+      if (!valTok || (vk !== "str" && vk !== "num")) throw new Error("条件には値が必要です");
+      q.where.push({ col: col, op: op, val: tokenValue(valTok), join: join });
+      if (peek() === "AND" || peek() === "OR"){ join = next(); continue; }
+      break;
+    }
+  }
+  if (peek() === "ORDER BY"){
+    next();
+    const col = next();
+    if (!col || tokenKind(col) !== "ident") throw new Error("ORDER BY のあとに列が必要です");
+    let dir = "ASC";
+    if (peek() === "ASC" || peek() === "DESC") dir = next();
+    q.orderBy = { col: col, dir: dir };
+  }
+  if (peek() === "LIMIT"){
+    next();
+    const n = next();
+    if (!n || tokenKind(n) !== "num") throw new Error("LIMIT のあとに数が必要です");
+    q.limit = Number(n);
+  }
+  if (i !== tokens.length) throw new Error("タイルの並びがSQLになっていません");
+  return q;
+}
+
+function compareVals(a, op, b){
+  switch (op){
+    case "=": return a === b;
+    case "!=": return a !== b;
+    case "<": return a < b;
+    case ">": return a > b;
+    case "<=": return a <= b;
+    case ">=": return a >= b;
+  }
+  return false;
+}
+
+function runQuery(quest, tokens){
+  const q = parseQuery(tokens);
+  if (q.table !== quest.table) throw new Error("テーブルは " + quest.table + " です");
+  const colSet = new Set(quest.columns);
+  const checkCol = (c) => { if (!colSet.has(c)) throw new Error("列 " + c + " はこのテーブルにありません"); };
+  q.cols.forEach((c) => { if (c !== "*") checkCol(c); });
+  q.where.forEach((w) => checkCol(w.col));
+  if (q.orderBy) checkCol(q.orderBy.col);
+  let objs = quest.rows.map((r) => {
+    const o = {};
+    quest.columns.forEach((c, idx) => { o[c] = r[idx]; });
+    return o;
+  });
+  if (q.where.length){
+    objs = objs.filter((o) => {
+      let acc = null;
+      for (const w of q.where){
+        const v = compareVals(o[w.col], w.op, w.val);
+        if (acc === null) acc = v;
+        else if (w.join === "AND") acc = acc && v;
+        else acc = acc || v;
+      }
+      return acc;
+    });
+  }
+  if (q.orderBy){
+    const col = q.orderBy.col, mul = q.orderBy.dir === "DESC" ? -1 : 1;
+    objs = objs.slice().sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * mul);
+  }
+  const outCols = q.cols[0] === "*" ? quest.columns.slice() : q.cols.slice();
+  let out = objs.map((o) => outCols.map((c) => o[c]));
+  if (q.limit != null) out = out.slice(0, q.limit);
+  return { columns: outCols, rows: out, ordered: !!q.orderBy };
+}
+
+function judge(quest, playerTokens){
+  let expected;
+  try { expected = runQuery(quest, quest.solution); }
+  catch (e) { return { ok: false, fatal: "作問エラー: " + e.message }; }
+  let actual;
+  try { actual = runQuery(quest, playerTokens); }
+  catch (e) { return { ok: false, kind: "syntax", message: e.message }; }
+  if (JSON.stringify(expected.columns) !== JSON.stringify(actual.columns)){
+    return { ok: false, kind: "columns", message: "取る列が違います。依頼文の「何を見せるか」をもう一度見てください。", expected: expected, actual: actual };
+  }
+  if (expected.rows.length !== actual.rows.length){
+    return { ok: false, kind: "rowcount", message: "件数が違います（正しくは " + expected.rows.length + " 件、いまは " + actual.rows.length + " 件）。条件を見直してください。", expected: expected, actual: actual };
+  }
+  const key = (r) => JSON.stringify(r);
+  if (expected.rows.every((r, i) => key(r) === key(actual.rows[i]))) return { ok: true, expected: expected, actual: actual };
+  const ms = (arr) => arr.map(key).sort().join("\n");
+  if (ms(expected.rows) === ms(actual.rows)){
+    return { ok: false, kind: "order", message: "行の中身は合っていますが、並び順が違います。", expected: expected, actual: actual };
+  }
+  return { ok: false, kind: "rows", message: "行の中身が違います。条件の値や演算子を見直してください。", expected: expected, actual: actual };
+}
+
+const GUILD_COLUMNS = ["name", "job", "level", "gold"];
+const GUILD_ROWS = [
+  ["アレン", "戦士", 12, 340],
+  ["ミア", "魔法使い", 8, 120],
+  ["ゴルド", "戦士", 5, 980],
+  ["セラ", "僧侶", 10, 260],
+  ["カイン", "盗賊", 15, 720],
+  ["リナ", "魔法使い", 14, 430],
+  ["バルド", "戦士", 18, 150],
+  ["ユキ", "僧侶", 3, 60],
+  ["レオン", "盗賊", 7, 510],
+  ["ノエル", "魔法使い", 20, 890]
+];
+
+const QUESTS = [
+  { id: "guild-01", theme: "guild", stage: 1, stageName: "階段1：SELECT＋FROM",
+    title: "名簿を全部見せて",
+    client: "受付の先輩「まずは冒険者名簿の全員分を、そのまま全部見せてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "*", "FROM", "adventurers", "name"],
+    solution: ["SELECT", "*", "FROM", "adventurers"] },
+  { id: "guild-02", theme: "guild", stage: 1, stageName: "階段1：SELECT＋FROM",
+    title: "名前だけの一覧",
+    client: "受付の先輩「掲示板に貼るから、名前だけの一覧が欲しいんだ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "FROM", "adventurers", "job", "*"],
+    solution: ["SELECT", "name", "FROM", "adventurers"] },
+  { id: "guild-03", theme: "guild", stage: 1, stageName: "階段1：SELECT＋FROM",
+    title: "名前と職業の一覧",
+    client: "受付の先輩「今度は名前と職業を並べた一覧を作ってくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "job", "FROM", "adventurers", "level"],
+    solution: ["SELECT", "name", "job", "FROM", "adventurers"] },
+  { id: "guild-04", theme: "guild", stage: 2, stageName: "階段2：WHERE",
+    title: "戦士を探して",
+    client: "依頼人「護衛を頼みたい。名簿から戦士だけの名前を出してくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "FROM", "adventurers", "WHERE", "job", "=", "'戦士'", "'魔法使い'", "level"],
+    solution: ["SELECT", "name", "FROM", "adventurers", "WHERE", "job", "=", "'戦士'"] },
+  { id: "guild-05", theme: "guild", stage: 2, stageName: "階段2：WHERE",
+    title: "ベテランを呼んで",
+    client: "受付の先輩「難しい依頼だ。レベル10以上の冒険者の、名前とレベルを見せてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "level", "level", "FROM", "adventurers", "WHERE", ">=", "10", "5", "<", "gold"],
+    solution: ["SELECT", "name", "level", "FROM", "adventurers", "WHERE", "level", ">=", "10"] },
+  { id: "guild-06", theme: "guild", stage: 3, stageName: "階段3：ORDER BY",
+    title: "強い順に並べて",
+    client: "依頼人「一番強い人に頼みたい。名簿をレベルの高い順に並べて、名前とレベルを見せてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "level", "level", "FROM", "adventurers", "ORDER BY", "DESC", "ASC", "gold"],
+    solution: ["SELECT", "name", "level", "FROM", "adventurers", "ORDER BY", "level", "DESC"] },
+  { id: "guild-07", theme: "guild", stage: 3, stageName: "階段3：ORDER BY＋LIMIT",
+    title: "金持ちトップ3",
+    client: "ギルドマスター「寄付のお願いに行くぞ。所持金の多い順に上位3人の、名前と所持金を頼む」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "gold", "gold", "FROM", "adventurers", "ORDER BY", "DESC", "LIMIT", "3", "5", "ASC", "level"],
+    solution: ["SELECT", "name", "gold", "FROM", "adventurers", "ORDER BY", "gold", "DESC", "LIMIT", "3"] },
+  { id: "guild-08", theme: "guild", stage: 4, stageName: "階段4：AND",
+    title: "魔法使いのベテラン",
+    client: "依頼人「魔法の依頼です。魔法使いで、レベル10以上の人の名前を出してください」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "FROM", "adventurers", "WHERE", "job", "=", "'魔法使い'", "AND", "level", ">=", "10", "OR", "'戦士'"],
+    solution: ["SELECT", "name", "FROM", "adventurers", "WHERE", "job", "=", "'魔法使い'", "AND", "level", ">=", "10"] },
+  { id: "guild-09", theme: "guild", stage: 4, stageName: "階段4：OR",
+    title: "回復と影の手",
+    client: "受付の先輩「僧侶か盗賊を呼んでくれ。名前と職業の一覧で頼む」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "job", "job", "job", "FROM", "adventurers", "WHERE", "=", "=", "'僧侶'", "OR", "'盗賊'", "AND", "'戦士'"],
+    solution: ["SELECT", "name", "job", "FROM", "adventurers", "WHERE", "job", "=", "'僧侶'", "OR", "job", "=", "'盗賊'"] },
+  { id: "guild-10", theme: "guild", stage: 4, stageName: "階段4：総合",
+    title: "組合費の相談",
+    client: "ギルドマスター「所持金400以上の人の名前と所持金を、所持金の少ない順に並べてくれ」",
+    table: "adventurers", columns: GUILD_COLUMNS, rows: GUILD_ROWS,
+    tiles: ["SELECT", "name", "gold", "gold", "gold", "FROM", "adventurers", "WHERE", ">=", "400", "ORDER BY", "ASC", "DESC", "100", "level"],
+    solution: ["SELECT", "name", "gold", "FROM", "adventurers", "WHERE", "gold", ">=", "400", "ORDER BY", "gold", "ASC"] }
+];
+// === CORE END ===
+</script>
+<script>
+(function(){
+  "use strict";
+  var SAVE_KEY = "select-star-progress-v1";
+  var cleared = [];
+  try { cleared = JSON.parse(localStorage.getItem(SAVE_KEY) || "[]"); } catch (e) { cleared = []; }
+  function saveProgress(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(cleared)); } catch (e) {} }
+
+  var screens = { title: document.getElementById("scr-title"), select: document.getElementById("scr-select"), game: document.getElementById("scr-game") };
+  function show(name){
+    Object.keys(screens).forEach(function(k){ screens[k].classList.toggle("on", k === name); });
+    window.scrollTo(0, 0);
+  }
+
+  // クエスト選択
+  var qlist = document.getElementById("qlist");
+  function isUnlocked(i){ return i === 0 || cleared.indexOf(QUESTS[i - 1].id) >= 0; }
+  function renderSelect(){
+    qlist.innerHTML = "";
+    QUESTS.forEach(function(q, i){
+      var b = document.createElement("button");
+      b.className = "bigbtn qbtn";
+      var st = "";
+      if (cleared.indexOf(q.id) >= 0) st = '<span class="st clear">✓ クリア</span>';
+      else if (!isUnlocked(i)) st = '<span class="st lock">未解放</span>';
+      b.innerHTML = "Q" + (i + 1) + "　" + q.title + st;
+      b.disabled = !isUnlocked(i);
+      b.addEventListener("click", function(){ openQuest(i); });
+      qlist.appendChild(b);
+    });
+  }
+
+  // ゲーム画面
+  var cur = -1, palette = [], assembly = [], uidSeq = 0;
+  var asmEl = document.getElementById("assembly"), palEl = document.getElementById("palette");
+  var sqlEl = document.getElementById("sqlprev");
+  var resultPanel = document.getElementById("result"), resultMsg = document.getElementById("result-msg");
+  var resultTable = document.getElementById("result-table"), btnNext = document.getElementById("btn-next");
+
+  function renderDataTable(el, columns, rows){
+    var html = "<tr>" + columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
+    rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
+    el.innerHTML = html;
+  }
+  function tileClass(text){
+    var k = tokenKind(text);
+    if (k === "kw") return "tile kw";
+    if (k === "op") return "tile op";
+    if (k === "str" || k === "num") return "tile val";
+    return "tile";
+  }
+  function displaySql(tokens){
+    var parts = [], inSel = true;
+    tokens.forEach(function(t, idx){
+      if (t === "FROM") inSel = false;
+      if (inSel && idx > 1 && tokenKind(t) === "ident" && (tokenKind(tokens[idx - 1]) === "ident" || tokens[idx - 1] === "*")) parts.push(",");
+      parts.push(t);
+    });
+    return parts.join(" ").replace(/ ,/g, ",");
+  }
+  function makeTileEl(inst, inAsm){
+    var d = document.createElement("span");
+    d.className = tileClass(inst.text) + (inAsm ? " inasm" : "");
+    d.textContent = inst.text;
+    d.dataset.uid = inst.uid;
+    attachTileHandlers(d, inst, inAsm);
+    return d;
+  }
+  function renderTiles(){
+    asmEl.innerHTML = "";
+    if (!assembly.length){
+      var e = document.createElement("span");
+      e.className = "empty"; e.textContent = "ここにタイルを並べてSQLを組み立てます";
+      asmEl.appendChild(e);
+    }
+    assembly.forEach(function(inst){ asmEl.appendChild(makeTileEl(inst, true)); });
+    palEl.innerHTML = "";
+    palette.forEach(function(inst){ palEl.appendChild(makeTileEl(inst, false)); });
+    var tokens = assembly.map(function(x){ return x.text; });
+    sqlEl.textContent = tokens.length ? displaySql(tokens) : "（SQLプレビュー）";
+  }
+  function moveTile(inst, inAsm){
+    if (inAsm){
+      assembly = assembly.filter(function(x){ return x.uid !== inst.uid; });
+      palette.push(inst);
+    } else {
+      palette = palette.filter(function(x){ return x.uid !== inst.uid; });
+      assembly.push(inst);
+    }
+    renderTiles();
+  }
+  function attachTileHandlers(el, inst, inAsm){
+    var startX = 0, startY = 0, dragging = false, ghost = null;
+    el.addEventListener("pointerdown", function(ev){
+      startX = ev.clientX; startY = ev.clientY; dragging = false;
+      el.setPointerCapture(ev.pointerId);
+    });
+    el.addEventListener("pointermove", function(ev){
+      if (ev.buttons !== 1) return;
+      if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 10){
+        dragging = true;
+        ghost = el.cloneNode(true);
+        ghost.className += " dragghost";
+        ghost.style.left = ev.clientX + "px"; ghost.style.top = ev.clientY + "px";
+        document.body.appendChild(ghost);
+      }
+      if (dragging && ghost){ ghost.style.left = ev.clientX + "px"; ghost.style.top = ev.clientY + "px"; }
+    });
+    el.addEventListener("pointerup", function(ev){
+      if (ghost){ ghost.remove(); ghost = null; }
+      if (dragging){
+        var rA = asmEl.getBoundingClientRect(), rP = palEl.getBoundingClientRect();
+        var pad = 30;
+        var overAsm = ev.clientX >= rA.left - pad && ev.clientX <= rA.right + pad && ev.clientY >= rA.top - pad && ev.clientY <= rA.bottom + pad;
+        var overPal = ev.clientX >= rP.left - pad && ev.clientX <= rP.right + pad && ev.clientY >= rP.top - pad && ev.clientY <= rP.bottom + pad;
+        if (!inAsm && overAsm) moveTile(inst, false);
+        else if (inAsm && overPal) moveTile(inst, true);
+      } else {
+        moveTile(inst, inAsm);
+      }
+      dragging = false;
+    });
+    el.addEventListener("pointercancel", function(){ if (ghost){ ghost.remove(); ghost = null; } dragging = false; });
+  }
+
+  function openQuest(i){
+    cur = i;
+    var q = QUESTS[i];
+    document.getElementById("g-stage").textContent = q.stageName;
+    document.getElementById("g-title").textContent = "Q" + (i + 1) + "　" + q.title;
+    document.getElementById("g-client").textContent = q.client;
+    document.getElementById("g-tname").textContent = "テーブル： " + q.table;
+    // テーブル表示：列名ヘッダ＋全行
+    var tbl = document.getElementById("g-table");
+    var html = "<tr>" + q.columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
+    q.rows.forEach(function(r){ html += "<tr>" + r.map(function(v){ return "<td>" + v + "</td>"; }).join("") + "</tr>"; });
+    tbl.innerHTML = html;
+    screens.game.style.backgroundImage = "url(assets/bg-" + q.theme + ".jpg)";
+    palette = q.tiles.map(function(t){ return { uid: ++uidSeq, text: t }; });
+    assembly = [];
+    resultPanel.className = "panel"; resultPanel.classList.remove("show");
+    btnNext.style.display = "none";
+    renderTiles();
+    show("game");
+  }
+
+  document.getElementById("btn-run").addEventListener("click", function(){
+    var q = QUESTS[cur];
+    var tokens = assembly.map(function(x){ return x.text; });
+    var res = judge(q, tokens);
+    resultPanel.classList.add("show");
+    if (res.ok){
+      resultPanel.classList.remove("bad"); resultPanel.classList.add("good");
+      resultMsg.textContent = "クエスト達成！ 依頼どおりのデータが取れました。";
+      if (res.actual) renderDataTable(resultTable, res.actual.columns, res.actual.rows);
+      resultTable.parentElement.style.display = "";
+      if (cleared.indexOf(q.id) < 0){ cleared.push(q.id); saveProgress(); }
+      if (cur + 1 < QUESTS.length){ btnNext.style.display = ""; } else { btnNext.style.display = "none"; }
+    } else {
+      resultPanel.classList.remove("good"); resultPanel.classList.add("bad");
+      resultMsg.textContent = res.message;
+      if (res.actual){ renderDataTable(resultTable, res.actual.columns, res.actual.rows); resultTable.parentElement.style.display = ""; }
+      else { resultTable.parentElement.style.display = "none"; }
+      btnNext.style.display = "none";
+    }
+  });
+  document.getElementById("btn-clear").addEventListener("click", function(){
+    palette = palette.concat(assembly); assembly = []; renderTiles();
+  });
+  btnNext.addEventListener("click", function(){ if (cur + 1 < QUESTS.length) openQuest(cur + 1); });
+  document.getElementById("btn-start").addEventListener("click", function(){ renderSelect(); show("select"); });
+  document.getElementById("btn-to-title").addEventListener("click", function(){ show("title"); });
+  document.getElementById("btn-to-select").addEventListener("click", function(){ renderSelect(); show("select"); });
+})();
+</script>
+</body>
+</html>
