@@ -85,6 +85,8 @@
   #result{display:none}
   #result.show{display:block}
   #result .msg{font-size:14px; line-height:1.7}
+  #result .note{display:none; font-size:12.5px; line-height:1.7; color:var(--sub); margin:10px 0 0; border-left:3px solid var(--gold); padding-left:10px; text-align:left}
+  #result .note.show{display:block}
   #result.good{border-color:var(--good)}
   #result.bad{border-color:var(--bad)}
   .backlink{display:inline-block; margin-top:14px; font-size:13px; color:var(--accent); background:none; border:none; cursor:pointer; padding:4px 0}
@@ -97,7 +99,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.7<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.8<br>ワードタイルを並べてSQLを組み立てるパズル</p>
     <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
@@ -135,6 +137,7 @@
     <div class="panel" id="result">
       <p class="msg" id="result-msg"></p>
       <div class="tblwrap"><table class="data" id="result-table"></table></div>
+      <p class="note" id="result-note"></p>
       <button class="bigbtn primary" id="btn-next" style="display:none">次のクエストへ ▶</button>
     </div>
 
@@ -507,7 +510,7 @@ const CARGO_ROWS = [
   ["センサー部品", "機械", 80, "タイタン港", 1500],
   ["観測ドローン", "機械", 240, "ルナ港", 3100],
   ["種子バンク", "食料", 60, "タイタン港", 2000],
-  ["抗生物質", "医療", 45, "ルナ港", 700],
+  ["非常食パック", "食料", 45, "ルナ港", 700],
   ["液体水素", "燃料", 720, "マーズ港", 1300]
 ];
 const PORTS_COLUMNS = ["name", "sector"];
@@ -1184,6 +1187,100 @@ const QUESTS = [
     tiles: ["SELECT", "observer", "PIVOT", "COUNT(*)", "FOR", "sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day", "SUM(temp)", "GROUP BY", "weather.temp", "shifts.observer", "weather.sky"],
     solution: ["SELECT", "shifts.observer", "PIVOT", "COUNT(*)", "FOR", "weather.sky", "FROM", "weather", "JOIN", "shifts", "ON", "weather.day", "=", "shifts.day"] }
 ];
+const NOTES = {
+ "guild-01": "「*」は全部の列という意味。SELECT〜FROM〜がSQLの基本形で、表のデータをそのまま取り出す。",
+ "guild-02": "列名を指定すると、その列だけを取り出せる。表示される列の順番は、書いた順になる。",
+ "guild-03": "列は複数並べられる（このゲームではカンマが自動で入る）。必要な列だけに絞ると一覧が見やすくなる。",
+ "guild-04": "WHEREは行を絞る条件。文字列の値はシングルクォートで囲むのがSQLの決まり。",
+ "guild-05": "数値の比較には >=（以上）や <（未満）などの比較演算子を使う。>= 10 は「10を含んで、それより大きい」という意味。",
+ "guild-06": "ORDER BYで並べ替え。DESCは大きい順（降順）、ASCは小さい順（昇順）で、省略するとASCになる。",
+ "guild-07": "LIMITは取る行数の上限。ORDER BYと組み合わせると「トップN」が作れる。",
+ "guild-08": "ANDは「両方とも満たす行」だけを残す。条件を足すほど結果は絞られていく。",
+ "guild-09": "ORは「どちらか一方でも満たす行」を残す。同じ列にORをつなぐと「この値か、あの値か」の絞り込みになる。",
+ "guild-10": "WHERE（絞る）→ ORDER BY（並べる）の順に処理される。条件と並べ替えは同時に使える。",
+ "cargo-01": "LIKEは文字列のパターン検索。%は「何文字でもよい」という意味で、'%燃料%'は「途中に燃料を含む」部分一致になる。",
+ "cargo-02": "'タ%'のように%を後ろだけに付けると「タで始まる」前方一致になる。%の位置で意味が変わる。",
+ "cargo-03": "COUNT(*)は行数を数える集計。集計を使うと、結果は行の集まりではなく「1つの値」になる。",
+ "cargo-04": "AVGは平均。SUM（合計）・MIN（最小）・MAX（最大）と同じ集計の仲間で、数値の列に使う。",
+ "cargo-05": "GROUP BYは「同じ値の行をグループにまとめる」。COUNT(*)と組み合わせると、グループごとの件数が数えられる。",
+ "cargo-06": "GROUP BYとSUMを組み合わせると、グループごとの合計が出せる。集計と一緒に出せる列は、GROUP BYに指定した列だけ。",
+ "cargo-07": "JOINは2つの表を共通の値でつなぐ。列名が両方の表にある場合は「表名.列名」と書く（この書き方を修飾という）。",
+ "cargo-08": "JOINした表にもWHEREで絞り込みができる。「つないでから絞る」という流れ。",
+ "cargo-09": "カッコの中のSELECTが副問い合わせ。先に内側（平均）が計算され、その値と外側の各行を比べる。",
+ "cargo-10": "「一番〜」はMAX（最大）やMIN（最小）を副問い合わせで求めるのが定番の形。同点の行が複数あれば全部返ってくる。",
+ "eco-01": "WHEREの条件は1つでも、列は複数出せる。絞り込みと、表示する列は別々に考えられる。",
+ "eco-02": "ORDER BY + LIMITの「トップN」。並べ替えの列は、表示しない列でも指定できる。",
+ "eco-03": "'ホ%'は「ホで始まる」前方一致。%を前に付けると後方一致、両方だと部分一致になる。",
+ "eco-04": "GROUP BY + COUNT(*)で「分類ごとの種類数」。グループの列と件数がペアで返る。",
+ "eco-05": "SUMは数値列の合計。WHEREなしだと、表全体が1つのグループとして集計される。",
+ "eco-06": "ORと >= の組み合わせ。ORは結果を広げ、ANDは結果を絞る、という感覚が大事。",
+ "eco-07": "JOINのONには「どの表の、どの列と、どの列を結ぶか」を書く。ここでは生息地の名前でつないでいる。",
+ "eco-08": "JOIN + WHERE。つないだ結果に対して、相手の表の列でも絞り込みができる。",
+ "eco-09": "副問い合わせの平均と各行を比べる形。「平均より〜」という依頼はこの形で書ける。",
+ "eco-10": "MAXの副問い合わせ。「最も〜したもの」を取り出す定番の形。",
+ "sco-01": "WHEREでポジションを絞り、名前とゴールを出す。条件に使った列（pos）は、表示しなくてもよい。",
+ "sco-02": "ASC（小さい順）+ LIMITで「若い順トップ3」。DESCとASCでトップの顔ぶれが変わる。",
+ "sco-03": "'%藤%'は部分一致。「藤で始まる」なら '藤%'、「藤で終わる」なら '%藤' と、%の位置で使い分ける。",
+ "sco-04": "GROUP BY pos でポジションごとの人数。COUNT(*)はグループ内の行数を数える。",
+ "sco-05": "GROUP BY + SUMで、チームごとの総ゴール。集計の種類を変えると、同じグループ化でも違う集計ができる。",
+ "sco-06": "ANDで「FWかつ二桁ゴール」。条件を重ねるほど対象は絞られる。",
+ "sco-07": "JOINでは、所属チームの名前を手がかりにチームの表とつなぐ。都市は相手の表の列。",
+ "sco-08": "JOIN + WHERE。相手の表の列（本拠地の都市）で絞ると、つながった行だけが残る。",
+ "sco-09": "「平均より決める」はAVGの副問い合わせ。内側の平均が先に決まり、外側の比較に使われる。",
+ "sco-10": "MINの副問い合わせで「最年少」。おとりの 19 のような固定値では、その場の答えが出ても「一番」という意味にはならない。",
+ "rui-01": "WHEREで素材を絞る。文字列の比較は = で行い、値はシングルクォートで囲む。",
+ "rui-02": "ORDER BY depth DESC + LIMIT 3で「深い順トップ3」。並べ替えは集計なしでも使える。",
+ "rui-03": "'%板'は「板で終わる」後方一致。%の位置が意味を決める。",
+ "rui-04": "GROUP BY era で時代ごとの件数。グループはデータの出現順に並ぶ（並べ替えたいときは ORDER BY を足す）。",
+ "rui-05": "GROUP BY + AVGで、区画ごとの平均深度。集計は COUNT・SUM・AVG などを使い分けられる。",
+ "rui-06": "ANDで「古代王国かつ深度5以上」。時代と数値、種類の違う条件も重ねられる。",
+ "rui-07": "JOINは発掘区画の名前で、区画の表とつなぐ。エリアは相手の表の列なので、修飾して書く。",
+ "rui-08": "JOIN + WHERE。相手の表の列（エリア）で絞り込む形は、実務でもよく出てくる。",
+ "rui-09": "「平均より深い」はAVGの副問い合わせ。平均は全体から1回だけ計算される。",
+ "rui-10": "MAXの副問い合わせで最も深い遺物。固定値のおとりでは「一番」という意味を表せない。",
+ "wea-01": "WHEREで天気を絞る。日付・気温など、必要な列だけを出す。",
+ "wea-02": "ORDER BY rain DESC + LIMIT 3。雨量のような数値の列は、そのまま並べ替えの基準にできる。",
+ "wea-03": "日付も文字列として保存されていれば LIKE で絞れる。ただし実際のDBでは日付は日付型で扱い、比較演算子（>= や <）で絞るのが普通。",
+ "wea-04": "GROUP BY sky で天気ごとの日数。分類ごとの件数は COUNT(*) の仕事。",
+ "wea-05": "AVG(temp)で最高気温の平均。集計だけを出すとき、結果は1行になる。",
+ "wea-06": "ANDで「雨かつ風が強い」。天気（文字列）と風速（数値）の条件を重ねている。",
+ "wea-07": "JOINで当番表とつなぐと、観測の行に担当者が付く。day は両方の表にある列なので、必ず表名をつけて書く。",
+ "wea-08": "JOIN + WHEREで、担当者（相手の表の列）を条件にする。SELECTに出す列は観測の表だけでもよい。",
+ "wea-09": "「平均より暖かい」はAVGの副問い合わせ。平均は期間全体で計算される。",
+ "wea-10": "MAXの副問い合わせで一番風の強い日。固定値のおとりでは「一番」を表せない。",
+ "guild-11": "カッコは「先にまとめて評価する」印。（戦士 OR 盗賊）を1つの条件にしてから、レベルの条件とANDで結んでいる。",
+ "guild-12": "ANDはORより先に評価される。「戦士全員」＋「レベル10以上の盗賊」になるのは、その優先順位のため。実務では誤読を防ぐため、カッコを付けることが多い。",
+ "guild-13": "HAVINGは「集計した後に絞る」条件。WHEREが集計前の行を絞るのに対して、HAVINGはグループを絞る。",
+ "guild-14": "WHERE（レベル10以上）→ GROUP BY（職業ごと）→ HAVING（2人以上）の3段構え。絞ってから集計し、集計後にまた絞る。",
+ "guild-15": "ピボット変換は「縦に並んだ集計を、横に広げた表にする」こと。実際のSQLでは CASE式で条件ごとに集計する書き方や、DBのPIVOT構文（列にする値を明示する）を使う。",
+ "cargo-11": "カッコの中のORを先に評価する。カッコがないとANDが先に効いて、意味が変わってしまう。",
+ "cargo-12": "ANDが先に効くので、「機械の全便」＋「ルナ港行きの燃料」という意味になる。依頼文の読みと一致しているか確かめるのが大事。",
+ "cargo-13": "平均運賃のような「集計の結果」に条件を付けるときは HAVING。WHEREには集計を書けない。",
+ "cargo-14": "GROUP BY dest の合計に HAVING で条件を付ける。おとりの 1000 では3行になってしまうので、しきい値の置き方ひとつで結果が変わる。",
+ "cargo-15": "行に分類、列に寄港地を置いた重量表。該当なしのマスは、SUMなので0になっている（実際のSQLでは、該当なしのSUMはNULLになることが多い）。",
+ "eco-11": "（森 OR 山岳）AND danger >= 2。カッコで「場所のどちらか」を固めてから、危険度の条件を重ねている。",
+ "eco-12": "「獣の全種」＋「観測30回以上の鳥」。カッコなしでも優先順位で意味は決まるが、実務ではカッコで明示するのが無難。",
+ "eco-13": "GROUP BYの結果（分類ごとの合計）を HAVING で絞る。「集計 → 絞り込み」の順に処理される。",
+ "eco-14": "WHERE danger >= 2 で先に絞ってから数えると、「危険種だけの人数」でグループを判定できる。",
+ "eco-15": "生息地×分類のクロス集計。ピボットは「2つの分類軸で眺める」ときの形。",
+ "sco-11": "（FW OR MF）AND age <= 21。カッコなしだと「FW全員、または21歳以下のMF」という別の意味になってしまう。",
+ "sco-12": "「青葉FC全員」＋「25歳以上のFW」。ANDがORより先、という決まりが効いている。",
+ "sco-13": "HAVING SUM(goals) >= 30 で「総得点30以上のチーム」。グループ単位の条件はHAVINGの仕事。",
+ "sco-14": "WHERE（24歳以下）で若手だけにしてから数える。WHEREとHAVINGの役割分担が、この問題の要点。",
+ "sco-15": "チーム×ポジションの得点表。実際のSQLで同じ表を作るなら、SUM(CASE WHEN pos = 'FW' THEN goals ELSE 0 END) のような書き方になる。",
+ "rui-11": "（金 OR 石）AND 深度5m以内。カッコで素材の組を先に作るのが、この問題の要点。",
+ "rui-12": "「古代王国の全品」＋「B区画の青銅」。優先順位を知らないと、意図と違う読み方をしてしまう。",
+ "rui-13": "HAVING COUNT(*) >= 4 で「4件以上出土した時代」。件数の条件も集計後なのでHAVING。",
+ "rui-14": "平均（集計）の結果に HAVING で条件を付ける。ちょうど6.0の区画は >= に含まれる（境界の扱いに注意）。",
+ "rui-15": "時代×素材の出土数表。列の並びは、データに現れた順になっている。",
+ "wea-11": "（晴れ OR 曇り）AND wind >= 4。カッコがあると「天気の組 × 風の条件」と素直に読める。",
+ "wea-12": "「雨の全日」＋「最高気温17度以上の晴れ」。カッコなしで書けるが、読み手のためにカッコを付ける書き方も実務では一般的。",
+ "wea-13": "HAVINGで「3日以上あった天気」。WHEREに COUNT(*) は書けない、という決まりも押さえておきたい。",
+ "wea-14": "WHERE rain = 0 → GROUP BY sky → HAVING >= 3。HAVINGを外すと曇りも残ってしまう、というのがこの問題の仕掛け。",
+ "wea-15": "JOINした結果をピボットする複合技。行キーも列も、相手の表と重ならないよう修飾して書いている。"
+};
+QUESTS.forEach(function(q){ if (NOTES[q.id]) q.note = NOTES[q.id]; });
+
 // === CORE END ===
 
 </script>
@@ -1246,6 +1343,7 @@ const QUESTS = [
   var sqlEl = document.getElementById("sqlprev");
   var resultPanel = document.getElementById("result"), resultMsg = document.getElementById("result-msg");
   var resultTable = document.getElementById("result-table"), btnNext = document.getElementById("btn-next");
+  var resultNote = document.getElementById("result-note");
 
   function renderDataTable(el, columns, rows){
     var html = "<tr>" + columns.map(function(c){ return "<th>" + c + "</th>"; }).join("") + "</tr>";
@@ -1409,7 +1507,7 @@ const QUESTS = [
     screens.game.style.backgroundImage = "url(assets/bg-" + q.theme + ".jpg)";
     palette = q.tiles.map(function(t){ return { uid: ++uidSeq, text: t }; });
     assembly = [];
-    resultPanel.className = "panel"; resultPanel.classList.remove("show");
+    resultPanel.className = "panel"; resultPanel.classList.remove("show"); resultNote.classList.remove("show");
     btnNext.style.display = "none";
     renderTiles();
     show("game");
@@ -1425,6 +1523,7 @@ const QUESTS = [
       sfx("good");
       resultPanel.classList.remove("bad"); resultPanel.classList.add("good");
       resultMsg.textContent = "クエスト達成！ 依頼どおりのデータが取れました。";
+      if (q.note){ resultNote.textContent = "【解説】" + q.note; resultNote.classList.add("show"); } else { resultNote.classList.remove("show"); }
       if (res.actual) renderDataTable(resultTable, res.actual.columns, res.actual.rows);
       resultTable.parentElement.style.display = "";
       if (cleared.indexOf(q.id) < 0){ cleared.push(q.id); saveProgress(); }
@@ -1432,6 +1531,7 @@ const QUESTS = [
     } else {
       sfx("bad");
       resultPanel.classList.remove("good"); resultPanel.classList.add("bad");
+      resultNote.classList.remove("show");
       resultMsg.textContent = res.message;
       if (res.actual){ renderDataTable(resultTable, res.actual.columns, res.actual.rows); resultTable.parentElement.style.display = ""; }
       else { resultTable.parentElement.style.display = "none"; }
