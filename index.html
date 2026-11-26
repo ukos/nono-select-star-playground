@@ -99,7 +99,7 @@
   <section id="scr-title" class="screen on">
     <img class="logo" src="assets/logo.jpg" alt="SELECT * — Every Quest Is a Query ロゴ">
     <button class="bigbtn primary" id="btn-start">▶ はじめる</button>
-    <p class="ver">SELECT * ver. 0.8<br>ワードタイルを並べてSQLを組み立てるパズル</p>
+    <p class="ver">SELECT * ver. 0.8.1<br>ワードタイルを並べてSQLを組み立てるパズル</p>
     <button class="backlink sndbtn" type="button">🔊 音：オン</button>
   </section>
 
@@ -470,6 +470,7 @@ function judge(quest, playerTokens){
   if (expected.rows.every((r, i) => key(r) === key(actual.rows[i]))) return { ok: true, expected: expected, actual: actual };
   const ms = (arr) => arr.map(key).sort().join("\n");
   if (ms(expected.rows) === ms(actual.rows)){
+    if (!expected.ordered) return { ok: true, expected: expected, actual: actual };
     return { ok: false, kind: "order", message: "行の中身は合っていますが、並び順が違います。", expected: expected, actual: actual };
   }
   return { ok: false, kind: "rows", message: "行の中身が違います。条件の値や演算子を見直してください。", expected: expected, actual: actual };
